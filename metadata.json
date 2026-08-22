@@ -1,0 +1,6 @@
+{
+  "name": "Busy UFO",
+  "description": "Simple Inventory & Billing System for small businesses in Sri Lanka",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

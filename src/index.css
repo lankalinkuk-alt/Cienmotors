@@ -1,0 +1,64 @@
+@import "tailwindcss";
+
+@media print {
+  html, body {
+    background: #ffffff !important;
+    color: #000000 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  .print-hidden,
+  .print\:hidden {
+    display: none !important;
+  }
+
+  /* When printing an invoice modal, hide all app layout siblings inside #root */
+  body.has-print-modal #root > div > header,
+  body.has-print-modal #root > div > div:not(#print-modal-container),
+  body.has-print-modal #root > div > main,
+  body.has-print-modal #root > div > nav,
+  body.has-print-modal #root > div > footer {
+    display: none !important;
+  }
+
+  /* Ensure print modal overlay becomes transparent and unconstrained */
+  body.has-print-modal #print-modal-container {
+    position: static !important;
+    background: transparent !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    overflow: visible !important;
+    display: block !important;
+    backdrop-filter: none !important;
+    box-shadow: none !important;
+    inset: auto !important;
+    z-index: auto !important;
+  }
+
+  body.has-print-modal #print-modal-container > div {
+    max-width: none !important;
+    width: 100% !important;
+    box-shadow: none !important;
+    border: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    background: transparent !important;
+  }
+
+  body.has-print-modal #print-modal-container .overflow-x-auto {
+    max-height: none !important;
+    overflow: visible !important;
+    background: transparent !important;
+    padding: 0 !important;
+    margin: 0 !important;
+  }
+
+  /* Prevent page breaks inside table rows and summaries */
+  tr, .avoid-break {
+    break-inside: avoid !important;
+    page-break-inside: avoid !important;
+  }
+}
