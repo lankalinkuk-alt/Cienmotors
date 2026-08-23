@@ -39,6 +39,7 @@ import {
 import { checkPermission } from '../lib/permissions';
 import { shareReportViaWhatsApp } from '../lib/whatsapp';
 import { ReportActionsToolbar } from './ReportActionsToolbar';
+import { getDateRangePresets } from '../lib/dateUtils';
 
 interface ReportsProps {
   sales: SaleInvoice[];
@@ -67,6 +68,23 @@ export const Reports: React.FC<ReportsProps> = ({
   const [activeReport, setActiveReport] = useState<
     'SALES' | 'PURCHASES' | 'STOCK' | 'CUST_OUT' | 'SUPP_PAY' | 'CASH_BOOK' | 'PROFIT'
   >('SALES');
+
+  // Date range filters
+  const [fromDate, setFromDate] = useState('');
+  const [toDate, setToDate] = useState('');
+
+  const isDateInRange = (dateStr: string) => {
+    if (!fromDate && !toDate) return true;
+    if (fromDate && dateStr < fromDate) return false;
+    if (toDate && dateStr > toDate) return false;
+    return true;
+  };
+
+  const filteredSales = useMemo(() => sales.filter((s) => isDateInRange(s.date)), [sales, fromDate, toDate]);
+  const filteredPurchases = useMemo(() => purchases.filter((p) => isDateInRange(p.date)), [purchases, fromDate, toDate]);
+  const filteredReceipts = useMemo(() => receipts.filter((r) => isDateInRange(r.date)), [receipts, fromDate, toDate]);
+  const filteredPayments = useMemo(() => payments.filter((pm) => isDateInRange(pm.date)), [payments, fromDate, toDate]);
+  const filteredExpenses = useMemo(() => expenses.filter((e) => isDateInRange(e.date)), [expenses, fromDate, toDate]);
 
   // Customer Aging Report States
   const [custSearchQuery, setCustSearchQuery] = useState('');
@@ -116,7 +134,7 @@ export const Reports: React.FC<ReportsProps> = ({
     return customers
       .map((cust) => {
         // Pending invoices for this customer
-        const pendingInvoices = sales
+        const pendingInvoices = filteredSales
           .filter((s) => s.customerId === cust.id && s.dueAmount > 0)
           .map((s) => {
             const ageDays = calculateAgeDays(s.date);
@@ -165,7 +183,7 @@ export const Reports: React.FC<ReportsProps> = ({
         };
       })
       .filter((item) => item.totalDue > 0);
-  }, [customers, sales]);
+  }, [customers, filteredSales]);
 
   // Summary totals for customer aging
   const customerAgingTotals = useMemo(() => {
@@ -218,7 +236,7 @@ export const Reports: React.FC<ReportsProps> = ({
     return suppliers
       .map((supp) => {
         // Pending purchase bills for this supplier
-        const pendingBills = purchases
+        const pendingBills = filteredPurchases
           .filter((p) => p.supplierId === supp.id && p.dueAmount > 0)
           .map((p) => {
             const ageDays = calculateAgeDays(p.date);
@@ -266,7 +284,7 @@ export const Reports: React.FC<ReportsProps> = ({
         };
       })
       .filter((item) => item.totalPayable > 0);
-  }, [suppliers, purchases]);
+  }, [suppliers, filteredPurchases]);
 
   // Summary totals for supplier aging
   const supplierAgingTotals = useMemo(() => {
@@ -341,11 +359,11 @@ export const Reports: React.FC<ReportsProps> = ({
   };
 
   // Calculations for Profit Report
-  const totalSalesRevenue = sales.reduce((sum, s) => sum + s.grandTotal, 0);
+  const totalSalesRevenue = filteredSales.reduce((sum, s) => sum + s.grandTotal, 0);
 
   // Estimate COGS based on costPrice of sold items
   let cogs = 0;
-  sales.forEach((s) => {
+  filteredSales.forEach((s) => {
     s.items.forEach((item) => {
       const prod = products.find((p) => p.id === item.productId || p.code === item.productCode);
       const unitCost = prod ? prod.costPrice : item.unitPrice * 0.7;
@@ -354,7 +372,7 @@ export const Reports: React.FC<ReportsProps> = ({
   });
 
   const grossProfit = totalSalesRevenue - cogs;
-  const totalExpenses = expenses.reduce((sum, e) => sum + e.amount, 0);
+  const totalExpenses = filteredExpenses.reduce((sum, e) => sum + e.amount, 0);
   const netProfit = grossProfit - totalExpenses;
 
   // Calculations for Stock
@@ -364,11 +382,11 @@ export const Reports: React.FC<ReportsProps> = ({
   // Cash Book Entries
   const cashBookRows = [
     { date: 'Initial', ref: 'SETUP', desc: 'Initial Opening Cash', type: 'IN', amount: settings.initialCashBalance },
-    ...sales.map((s) => ({ date: s.date, ref: s.invoiceNumber, desc: `Sale (${s.customerName})`, type: 'IN', amount: s.paidAmount })),
-    ...receipts.filter((r) => r.paymentMode === 'CASH').map((r) => ({ date: r.date, ref: r.receiptNumber, desc: `Receipt (${r.customerName})`, type: 'IN', amount: r.amount })),
-    ...purchases.map((p) => ({ date: p.date, ref: p.purchaseNumber, desc: `Purchase (${p.supplierName})`, type: 'OUT', amount: p.paidAmount })),
-    ...payments.filter((pm) => pm.paymentMode === 'CASH').map((pm) => ({ date: pm.date, ref: pm.paymentNumber, desc: `Payment (${pm.supplierName})`, type: 'OUT', amount: pm.amount })),
-    ...expenses.filter((e) => e.paymentMode === 'CASH').map((e) => ({ date: e.date, ref: e.expenseNumber, desc: `Expense (${e.category})`, type: 'OUT', amount: e.amount }))
+    ...filteredSales.map((s) => ({ date: s.date, ref: s.invoiceNumber, desc: `Sale (${s.customerName})`, type: 'IN', amount: s.paidAmount })),
+    ...filteredReceipts.filter((r) => r.paymentMode === 'CASH').map((r) => ({ date: r.date, ref: r.receiptNumber, desc: `Receipt (${r.customerName})`, type: 'IN', amount: r.amount })),
+    ...filteredPurchases.map((p) => ({ date: p.date, ref: p.purchaseNumber, desc: `Purchase (${p.supplierName})`, type: 'OUT', amount: p.paidAmount })),
+    ...filteredPayments.filter((pm) => pm.paymentMode === 'CASH').map((pm) => ({ date: pm.date, ref: pm.paymentNumber, desc: `Payment (${pm.supplierName})`, type: 'OUT', amount: pm.amount })),
+    ...filteredExpenses.filter((e) => e.paymentMode === 'CASH').map((e) => ({ date: e.date, ref: e.expenseNumber, desc: `Expense (${e.category})`, type: 'OUT', amount: e.amount }))
   ].filter((row) => row.amount > 0);
 
   // Compute current report title and summary lines
@@ -378,37 +396,37 @@ export const Reports: React.FC<ReportsProps> = ({
 
     if (activeReport === 'SALES') {
       title = 'Sales Summary Report';
-      const totalRev = sales.reduce((sum, s) => sum + s.grandTotal, 0);
-      const totalPaid = sales.reduce((sum, s) => sum + s.paidAmount, 0);
-      const totalDue = sales.reduce((sum, s) => sum + s.dueAmount, 0);
+      const totalRev = filteredSales.reduce((sum, s) => sum + s.grandTotal, 0);
+      const totalPaid = filteredSales.reduce((sum, s) => sum + s.paidAmount, 0);
+      const totalDue = filteredSales.reduce((sum, s) => sum + s.dueAmount, 0);
       lines = [
         `📊 *${settings.companyName || 'Company Name'}*`,
         `*Sales Summary Report*`,
         `*Date:* ${new Date().toISOString().split('T')[0]}`,
         `------------------------------`,
-        `• Total Invoices: ${sales.length}`,
+        `• Total Invoices: ${filteredSales.length}`,
         `• Total Revenue: ${settings.currencySymbol} ${totalRev.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
         `• Total Collected: ${settings.currencySymbol} ${totalPaid.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
         `• Total Pending Due: ${settings.currencySymbol} ${totalDue.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
         `\n*Recent Sales Invoices:*`,
-        ...sales.slice(0, 5).map((s) => `• ${s.invoiceNumber} (${s.customerName}): ${settings.currencySymbol}${s.grandTotal}`)
+        ...filteredSales.slice(0, 5).map((s) => `• ${s.invoiceNumber} (${s.customerName}): ${settings.currencySymbol}${s.grandTotal}`)
       ];
     } else if (activeReport === 'PURCHASES') {
       title = 'Purchase Summary Report';
-      const totalPur = purchases.reduce((sum, p) => sum + p.grandTotal, 0);
-      const totalPaid = purchases.reduce((sum, p) => sum + p.paidAmount, 0);
-      const totalDue = purchases.reduce((sum, p) => sum + p.dueAmount, 0);
+      const totalPur = filteredPurchases.reduce((sum, p) => sum + p.grandTotal, 0);
+      const totalPaid = filteredPurchases.reduce((sum, p) => sum + p.paidAmount, 0);
+      const totalDue = filteredPurchases.reduce((sum, p) => sum + p.dueAmount, 0);
       lines = [
         `📊 *${settings.companyName || 'Company Name'}*`,
         `*Purchase Summary Report*`,
         `*Date:* ${new Date().toISOString().split('T')[0]}`,
         `------------------------------`,
-        `• Total Purchase Bills: ${purchases.length}`,
+        `• Total Purchase Bills: ${filteredPurchases.length}`,
         `• Total Purchase Value: ${settings.currencySymbol} ${totalPur.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
         `• Total Paid to Suppliers: ${settings.currencySymbol} ${totalPaid.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
         `• Total Supplier Payable: ${settings.currencySymbol} ${totalDue.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
         `\n*Recent Purchase Bills:*`,
-        ...purchases.slice(0, 5).map((p) => `• ${p.purchaseNumber} (${p.supplierName}): ${settings.currencySymbol}${p.grandTotal}`)
+        ...filteredPurchases.slice(0, 5).map((p) => `• ${p.purchaseNumber} (${p.supplierName}): ${settings.currencySymbol}${p.grandTotal}`)
       ];
     } else if (activeReport === 'STOCK') {
       title = 'Stock Valuation & Inventory Report';
@@ -495,7 +513,7 @@ export const Reports: React.FC<ReportsProps> = ({
       currentReportTitle: title,
       currentReportSummaryText: lines.join('\n')
     };
-  }, [activeReport, sales, purchases, products, customerAgingData, customerAgingTotals, supplierAgingData, supplierAgingTotals, cashBookRows, settings, totalStockCostVal, totalStockSalesVal, totalSalesRevenue, cogs, grossProfit, totalExpenses, netProfit]);
+  }, [activeReport, filteredSales, filteredPurchases, products, customerAgingData, customerAgingTotals, supplierAgingData, supplierAgingTotals, cashBookRows, settings, totalStockCostVal, totalStockSalesVal, totalSalesRevenue, cogs, grossProfit, totalExpenses, netProfit]);
 
   return (
     <div className="space-y-6 pb-8">
@@ -513,6 +531,62 @@ export const Reports: React.FC<ReportsProps> = ({
           summaryText={currentReportSummaryText}
           settings={settings}
         />
+      </div>
+
+      {/* Date Range & Period Filter Bar */}
+      <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs flex flex-wrap items-center justify-between gap-4">
+        <div className="flex flex-wrap items-center gap-1.5 bg-slate-100 p-1 rounded-xl text-xs font-semibold">
+          {Object.entries(getDateRangePresets()).map(([key, p]) => (
+            <button
+              key={key}
+              type="button"
+              onClick={() => {
+                setFromDate(p.from);
+                setToDate(p.to);
+              }}
+              className={`px-3 py-1.5 rounded-lg transition-colors cursor-pointer ${
+                fromDate === p.from && toDate === p.to
+                  ? 'bg-white text-blue-600 shadow-xs font-bold'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              {p.label}
+            </button>
+          ))}
+        </div>
+
+        <div className="flex items-center gap-3 text-xs font-semibold">
+          <div className="flex items-center gap-1.5">
+            <span className="text-slate-500">From:</span>
+            <input
+              type="date"
+              value={fromDate}
+              onChange={(e) => setFromDate(e.target.value)}
+              className="px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-slate-800 font-mono focus:outline-none focus:border-blue-500"
+            />
+          </div>
+          <div className="flex items-center gap-1.5">
+            <span className="text-slate-500">To:</span>
+            <input
+              type="date"
+              value={toDate}
+              onChange={(e) => setToDate(e.target.value)}
+              className="px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-slate-800 font-mono focus:outline-none focus:border-blue-500"
+            />
+          </div>
+          {(fromDate || toDate) && (
+            <button
+              type="button"
+              onClick={() => {
+                setFromDate('');
+                setToDate('');
+              }}
+              className="text-xs text-blue-600 hover:underline font-bold cursor-pointer ml-1"
+            >
+              Clear
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Report Switcher Tabs */}
@@ -651,7 +725,7 @@ export const Reports: React.FC<ReportsProps> = ({
                   handleExportCSV(
                     'SalesReport',
                     ['InvoiceNo', 'Customer', 'Date', 'Type', 'GrandTotal', 'Paid', 'Due'],
-                    sales.map((s) => [s.invoiceNumber, s.customerName, s.date, s.type, s.grandTotal, s.paidAmount, s.dueAmount])
+                    filteredSales.map((s) => [s.invoiceNumber, s.customerName, s.date, s.type, s.grandTotal, s.paidAmount, s.dueAmount])
                   )
                 }
                 className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 rounded-xl text-xs font-bold cursor-pointer"
@@ -672,7 +746,7 @@ export const Reports: React.FC<ReportsProps> = ({
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 font-medium">
-                  {sales.map((s) => (
+                  {filteredSales.map((s) => (
                     <tr key={s.id}>
                       <td className="p-3 font-mono font-bold text-blue-600">{s.invoiceNumber}</td>
                       <td className="p-3 font-bold">{s.customerName}</td>
@@ -702,7 +776,7 @@ export const Reports: React.FC<ReportsProps> = ({
                   handleExportCSV(
                     'PurchaseReport',
                     ['PurchaseNo', 'Supplier', 'Date', 'Type', 'GrandTotal', 'Paid', 'Due'],
-                    purchases.map((p) => [p.purchaseNumber, p.supplierName, p.date, p.type, p.grandTotal, p.paidAmount, p.dueAmount])
+                    filteredPurchases.map((p) => [p.purchaseNumber, p.supplierName, p.date, p.type, p.grandTotal, p.paidAmount, p.dueAmount])
                   )
                 }
                 className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 rounded-xl text-xs font-bold cursor-pointer"
@@ -723,7 +797,7 @@ export const Reports: React.FC<ReportsProps> = ({
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 font-medium">
-                  {purchases.map((p) => (
+                  {filteredPurchases.map((p) => (
                     <tr key={p.id}>
                       <td className="p-3 font-mono font-bold text-purple-600">{p.purchaseNumber}</td>
                       <td className="p-3 font-bold">{p.supplierName}</td>

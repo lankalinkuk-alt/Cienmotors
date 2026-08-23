@@ -15,6 +15,7 @@ import {
 import { Customer, Supplier, Product, SaleInvoice, PurchaseInvoice, Expense, AppSettings, Company, PdcTransaction } from '../types';
 import { StorageService } from '../lib/storage';
 import { ReportActionsToolbar } from './ReportActionsToolbar';
+import { getDateRangePresets } from '../lib/dateUtils';
 
 interface MisReportsProps {
   sales: SaleInvoice[];
@@ -37,7 +38,8 @@ type MisCategory =
   | 'PROFITABILITY'
   | 'CASH_BANK'
   | 'EXPENSE'
-  | 'PDC';
+  | 'PDC'
+  | 'BILLED_ITEMS';
 
 export const MisReports: React.FC<MisReportsProps> = ({
   sales,
@@ -52,16 +54,67 @@ export const MisReports: React.FC<MisReportsProps> = ({
 }) => {
   const [activeCategory, setActiveCategory] = useState<MisCategory>('SALES');
 
+  // Date range filters
+  const [fromDate, setFromDate] = useState('');
+  const [toDate, setToDate] = useState('');
+
+  const isDateInRange = (dateStr: string) => {
+    if (!fromDate && !toDate) return true;
+    if (fromDate && dateStr < fromDate) return false;
+    if (toDate && dateStr > toDate) return false;
+    return true;
+  };
+
+  const filteredSales = useMemo(() => sales.filter((s) => isDateInRange(s.date)), [sales, fromDate, toDate]);
+  const filteredPurchases = useMemo(() => purchases.filter((p) => isDateInRange(p.date)), [purchases, fromDate, toDate]);
+  const filteredExpenses = useMemo(() => expenses.filter((e) => isDateInRange(e.date)), [expenses, fromDate, toDate]);
+  const filteredPdcs = useMemo(() => pdcs.filter((p) => isDateInRange(p.chequeDate)), [pdcs, fromDate, toDate]);
+
+  // Billed Items data aggregated from filtered sales with profitability
+  const billedItemsData = useMemo(() => {
+    const map = new Map<string, { code: string; name: string; qty: number; revenue: number; cost: number; profit: number; margin: number; invoiceCount: number }>();
+    filteredSales.forEach((s) => {
+      (s.items || []).forEach((item) => {
+        const key = item.productId || item.productCode || item.productName;
+        const prod = products.find((p) => p.id === item.productId || p.code === item.productCode);
+        const unitCost = prod ? prod.costPrice : (item.unitPrice > 0 ? item.unitPrice * 0.7 : 0);
+        const itemCost = item.quantity * unitCost;
+        const itemRevenue = item.total !== undefined ? item.total : (item.quantity * item.unitPrice);
+        const itemProfit = itemRevenue - itemCost;
+
+        const existing = map.get(key) || {
+          code: item.productCode || prod?.code || '-',
+          name: item.productName || prod?.name || 'Unknown Item',
+          qty: 0,
+          revenue: 0,
+          cost: 0,
+          profit: 0,
+          margin: 0,
+          invoiceCount: 0
+        };
+        existing.qty += item.quantity;
+        existing.revenue += itemRevenue;
+        existing.cost += itemCost;
+        existing.profit += itemProfit;
+        existing.margin = existing.revenue > 0 ? (existing.profit / existing.revenue) * 100 : 0;
+        existing.invoiceCount += 1;
+        map.set(key, existing);
+      });
+    });
+    return Array.from(map.values()).sort((a, b) => b.profit - a.profit);
+  }, [filteredSales, products]);
+
   const categories: Array<{ id: MisCategory; label: string; icon: any; count: number }> = [
-    { id: 'SALES', label: 'Sales MIS', icon: TrendingUp, count: sales.length },
-    { id: 'PURCHASE', label: 'Purchase MIS', icon: ShoppingCart, count: purchases.length },
+    { id: 'SALES', label: 'Sales MIS', icon: TrendingUp, count: filteredSales.length },
+    { id: 'BILLED_ITEMS', label: 'Billed Items & Profitability', icon: Package, count: billedItemsData.length },
+    { id: 'PURCHASE', label: 'Purchase MIS', icon: ShoppingCart, count: filteredPurchases.length },
     { id: 'INVENTORY', label: 'Inventory MIS', icon: Package, count: products.length },
     { id: 'RECEIVABLE', label: 'Receivables Ageing', icon: Users, count: customers.length },
     { id: 'PAYABLE', label: 'Payables MIS', icon: Building2, count: suppliers.length },
-    { id: 'PROFITABILITY', label: 'Profitability MIS', icon: BarChart3, count: sales.length },
+    { id: 'PROFITABILITY', label: 'Profitability MIS', icon: BarChart3, count: filteredSales.length },
     { id: 'CASH_BANK', label: 'Cash & Bank MIS', icon: DollarSign, count: 2 },
-    { id: 'EXPENSE', label: 'Expense MIS', icon: PieChart, count: expenses.length },
-    { id: 'PDC', label: 'PDC Register MIS', icon: Clock, count: pdcs.length }
+    { id: 'EXPENSE', label: 'Expense MIS', icon: PieChart, count: filteredExpenses.length },
+    { id: 'PDC', label: 'PDC Register MIS', icon: Clock, count: filteredPdcs.length }
   ];
 
   const { misTitle, misSummaryText } = useMemo(() => {
@@ -76,19 +129,33 @@ export const MisReports: React.FC<MisReportsProps> = ({
 
     if (activeCategory === 'SALES') {
       title = 'Sales MIS Analytics';
-      const totRev = sales.reduce((sum, s) => sum + s.grandTotal, 0);
-      const totDue = sales.reduce((sum, s) => sum + s.dueAmount, 0);
+      const totRev = filteredSales.reduce((sum, s) => sum + s.grandTotal, 0);
+      const totDue = filteredSales.reduce((sum, s) => sum + s.dueAmount, 0);
       lines.push(
-        `• Total Invoices: ${sales.length}`,
+        `• Total Invoices: ${filteredSales.length}`,
         `• Total Sales Revenue: ${settings.currencySymbol} ${totRev.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
         `• Total Outstanding Due: ${settings.currencySymbol} ${totDue.toLocaleString('en-US', { minimumFractionDigits: 2 })}`
       );
+    } else if (activeCategory === 'BILLED_ITEMS') {
+      title = 'Billed Items & Profitability Report';
+      const totalQty = billedItemsData.reduce((sum, i) => sum + i.qty, 0);
+      const totalRev = billedItemsData.reduce((sum, i) => sum + i.revenue, 0);
+      const totalCost = billedItemsData.reduce((sum, i) => sum + i.cost, 0);
+      const totalProfit = billedItemsData.reduce((sum, i) => sum + i.profit, 0);
+      const overallMargin = totalRev > 0 ? (totalProfit / totalRev) * 100 : 0;
+      lines.push(
+        `• Total Unique Billed Items: ${billedItemsData.length}`,
+        `• Total Units Sold: ${totalQty}`,
+        `• Total Revenue: ${settings.currencySymbol} ${totalRev.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
+        `• Total Cost: ${settings.currencySymbol} ${totalCost.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
+        `• Gross Profit: ${settings.currencySymbol} ${totalProfit.toLocaleString('en-US', { minimumFractionDigits: 2 })} (${overallMargin.toFixed(1)}%)`
+      );
     } else if (activeCategory === 'PURCHASE') {
       title = 'Purchase MIS Analytics';
-      const totPur = purchases.reduce((sum, p) => sum + p.grandTotal, 0);
-      const totDue = purchases.reduce((sum, p) => sum + p.dueAmount, 0);
+      const totPur = filteredPurchases.reduce((sum, p) => sum + p.grandTotal, 0);
+      const totDue = filteredPurchases.reduce((sum, p) => sum + p.dueAmount, 0);
       lines.push(
-        `• Total Purchase Bills: ${purchases.length}`,
+        `• Total Purchase Bills: ${filteredPurchases.length}`,
         `• Total Purchase Cost: ${settings.currencySymbol} ${totPur.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
         `• Total Supplier Payables: ${settings.currencySymbol} ${totDue.toLocaleString('en-US', { minimumFractionDigits: 2 })}`
       );
@@ -117,17 +184,17 @@ export const MisReports: React.FC<MisReportsProps> = ({
       );
     } else if (activeCategory === 'EXPENSE') {
       title = 'Expense MIS';
-      const totExp = expenses.reduce((sum, e) => sum + e.amount, 0);
+      const totExp = filteredExpenses.reduce((sum, e) => sum + e.amount, 0);
       lines.push(
-        `• Total Expense Entries: ${expenses.length}`,
+        `• Total Expense Entries: ${filteredExpenses.length}`,
         `• Total Operating Expenses: ${settings.currencySymbol} ${totExp.toLocaleString('en-US', { minimumFractionDigits: 2 })}`
       );
     } else if (activeCategory === 'PDC') {
       title = 'PDC Register MIS';
-      const pendingReceived = pdcs.filter((p) => p.type === 'RECEIVED' && p.status === 'PENDING').reduce((sum, p) => sum + p.amount, 0);
-      const pendingIssued = pdcs.filter((p) => p.type === 'ISSUED' && p.status === 'PENDING').reduce((sum, p) => sum + p.amount, 0);
+      const pendingReceived = filteredPdcs.filter((p) => p.type === 'RECEIVED' && p.status === 'PENDING').reduce((sum, p) => sum + p.amount, 0);
+      const pendingIssued = filteredPdcs.filter((p) => p.type === 'ISSUED' && p.status === 'PENDING').reduce((sum, p) => sum + p.amount, 0);
       lines.push(
-        `• Total PDC Transactions: ${pdcs.length}`,
+        `• Total PDC Transactions: ${filteredPdcs.length}`,
         `• Pending Received PDCs: ${settings.currencySymbol} ${pendingReceived.toFixed(2)}`,
         `• Pending Issued PDCs: ${settings.currencySymbol} ${pendingIssued.toFixed(2)}`
       );
@@ -140,7 +207,7 @@ export const MisReports: React.FC<MisReportsProps> = ({
       misTitle: title,
       misSummaryText: lines.join('\n')
     };
-  }, [activeCategory, sales, purchases, products, customers, suppliers, expenses, pdcs, settings, categories]);
+  }, [activeCategory, filteredSales, billedItemsData, filteredPurchases, products, customers, suppliers, filteredExpenses, filteredPdcs, settings, categories]);
 
   return (
     <div className="space-y-6">
@@ -152,7 +219,7 @@ export const MisReports: React.FC<MisReportsProps> = ({
             <span>Management Information System (MIS) Reports</span>
           </h2>
           <p className="text-xs text-slate-500 mt-0.5">
-            Executive intelligence reports for sales, stock, margin, cash flow, and ageing analytics
+            Executive intelligence reports for sales, billed items, stock, margin, cash flow, and ageing analytics
           </p>
         </div>
 
@@ -161,6 +228,62 @@ export const MisReports: React.FC<MisReportsProps> = ({
           summaryText={misSummaryText}
           settings={settings}
         />
+      </div>
+
+      {/* Date Range & Period Filter Bar */}
+      <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs flex flex-wrap items-center justify-between gap-4">
+        <div className="flex flex-wrap items-center gap-1.5 bg-slate-100 p-1 rounded-xl text-xs font-semibold">
+          {Object.entries(getDateRangePresets()).map(([key, p]) => (
+            <button
+              key={key}
+              type="button"
+              onClick={() => {
+                setFromDate(p.from);
+                setToDate(p.to);
+              }}
+              className={`px-3 py-1.5 rounded-lg transition-colors cursor-pointer ${
+                fromDate === p.from && toDate === p.to
+                  ? 'bg-white text-blue-600 shadow-xs font-bold'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              {p.label}
+            </button>
+          ))}
+        </div>
+
+        <div className="flex items-center gap-3 text-xs font-semibold">
+          <div className="flex items-center gap-1.5">
+            <span className="text-slate-500">From:</span>
+            <input
+              type="date"
+              value={fromDate}
+              onChange={(e) => setFromDate(e.target.value)}
+              className="px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-slate-800 font-mono focus:outline-none focus:border-blue-500"
+            />
+          </div>
+          <div className="flex items-center gap-1.5">
+            <span className="text-slate-500">To:</span>
+            <input
+              type="date"
+              value={toDate}
+              onChange={(e) => setToDate(e.target.value)}
+              className="px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-slate-800 font-mono focus:outline-none focus:border-blue-500"
+            />
+          </div>
+          {(fromDate || toDate) && (
+            <button
+              type="button"
+              onClick={() => {
+                setFromDate('');
+                setToDate('');
+              }}
+              className="text-xs text-blue-600 hover:underline font-bold cursor-pointer ml-1"
+            >
+              Clear
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Main Grid Layout */}
@@ -217,7 +340,7 @@ export const MisReports: React.FC<MisReportsProps> = ({
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {sales.map((s) => (
+                    {filteredSales.map((s) => (
                       <tr key={s.id} className="hover:bg-slate-50">
                         <td className="p-2.5 font-bold font-mono text-blue-600">{s.invoiceNumber}</td>
                         <td className="p-2.5">{s.date}</td>
@@ -225,6 +348,43 @@ export const MisReports: React.FC<MisReportsProps> = ({
                         <td className="p-2.5 text-right font-bold">{s.grandTotal.toFixed(2)}</td>
                         <td className="p-2.5 text-right text-emerald-600">{s.paidAmount.toFixed(2)}</td>
                         <td className="p-2.5 text-right text-rose-600 font-bold">{s.dueAmount.toFixed(2)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {activeCategory === 'BILLED_ITEMS' && (
+            <div className="space-y-4">
+              <h3 className="font-bold text-slate-900 text-base border-b border-slate-200 pb-2">Billed Items & Profitability Report</h3>
+              <p className="text-xs text-slate-500">Aggregated item-wise sales, cost, gross profit, and margin percentage within the selected date range</p>
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs">
+                  <thead className="bg-slate-100 text-slate-700 font-bold">
+                    <tr>
+                      <th className="p-2.5">Item Code</th>
+                      <th className="p-2.5">Item Name</th>
+                      <th className="p-2.5 text-center">Invoices</th>
+                      <th className="p-2.5 text-center">Qty Sold</th>
+                      <th className="p-2.5 text-right">Revenue ({settings.currencySymbol})</th>
+                      <th className="p-2.5 text-right">Cost ({settings.currencySymbol})</th>
+                      <th className="p-2.5 text-right">Gross Profit ({settings.currencySymbol})</th>
+                      <th className="p-2.5 text-right">Margin (%)</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {billedItemsData.map((item, idx) => (
+                      <tr key={idx} className="hover:bg-slate-50">
+                        <td className="p-2.5 font-mono font-bold text-blue-600">{item.code}</td>
+                        <td className="p-2.5 font-bold text-slate-900">{item.name}</td>
+                        <td className="p-2.5 text-center font-semibold">{item.invoiceCount}</td>
+                        <td className="p-2.5 text-center font-bold text-emerald-700">{item.qty}</td>
+                        <td className="p-2.5 text-right font-mono font-semibold text-slate-900">{item.revenue.toFixed(2)}</td>
+                        <td className="p-2.5 text-right font-mono text-slate-600">{item.cost.toFixed(2)}</td>
+                        <td className="p-2.5 text-right font-mono font-bold text-emerald-700">{item.profit.toFixed(2)}</td>
+                        <td className="p-2.5 text-right font-mono font-bold text-blue-700">{item.margin.toFixed(1)}%</td>
                       </tr>
                     ))}
                   </tbody>
@@ -248,7 +408,7 @@ export const MisReports: React.FC<MisReportsProps> = ({
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {purchases.map((p) => (
+                    {filteredPurchases.map((p) => (
                       <tr key={p.id} className="hover:bg-slate-50">
                         <td className="p-2.5 font-bold font-mono text-blue-600">{p.purchaseNumber}</td>
                         <td className="p-2.5">{p.date}</td>
@@ -372,7 +532,7 @@ export const MisReports: React.FC<MisReportsProps> = ({
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {sales.map((s) => {
+                    {filteredSales.map((s) => {
                       const estCost = (s.items || []).reduce((sum, item) => {
                         const prod = products.find((p) => p.id === item.productId);
                         return sum + (item.quantity * (prod?.costPrice || item.unitPrice * 0.7));
@@ -431,7 +591,7 @@ export const MisReports: React.FC<MisReportsProps> = ({
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {expenses.map((e) => (
+                    {filteredExpenses.map((e) => (
                       <tr key={e.id} className="hover:bg-slate-50">
                         <td className="p-2.5 font-mono font-bold text-blue-600">{e.expenseNumber}</td>
                         <td className="p-2.5">{e.date}</td>
@@ -462,7 +622,7 @@ export const MisReports: React.FC<MisReportsProps> = ({
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {pdcs.map((p) => (
+                    {filteredPdcs.map((p) => (
                       <tr key={p.id} className="hover:bg-slate-50">
                         <td className="p-2.5">{p.chequeDate}</td>
                         <td className="p-2.5 font-bold">{p.type}</td>
@@ -486,3 +646,4 @@ export const MisReports: React.FC<MisReportsProps> = ({
     </div>
   );
 };
+
