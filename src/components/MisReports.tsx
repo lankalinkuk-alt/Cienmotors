@@ -72,36 +72,41 @@ export const MisReports: React.FC<MisReportsProps> = ({
 
   // Billed Items data aggregated from filtered sales with profitability
   const billedItemsData = useMemo(() => {
-    const map = new Map<string, { code: string; name: string; qty: number; revenue: number; cost: number; profit: number; margin: number; invoiceCount: number }>();
+    const map = new Map<string, { code: string; name: string; qty: number; revenue: number; cost: number | null; profit: number | null; margin: number | null; invoiceCount: number }>();
     filteredSales.forEach((s) => {
       (s.items || []).forEach((item) => {
         const key = item.productId || item.productCode || item.productName;
         const prod = products.find((p) => p.id === item.productId || p.code === item.productCode);
-        const unitCost = prod ? prod.costPrice : (item.unitPrice > 0 ? item.unitPrice * 0.7 : 0);
-        const itemCost = item.quantity * unitCost;
+        const hasCost = prod && prod.costPrice > 0;
         const itemRevenue = item.total !== undefined ? item.total : (item.quantity * item.unitPrice);
-        const itemProfit = itemRevenue - itemCost;
+        const itemCost = hasCost ? (item.quantity * prod.costPrice) : null;
 
         const existing = map.get(key) || {
           code: item.productCode || prod?.code || '-',
           name: item.productName || prod?.name || 'Unknown Item',
           qty: 0,
           revenue: 0,
-          cost: 0,
-          profit: 0,
-          margin: 0,
+          cost: hasCost ? 0 : null,
+          profit: hasCost ? 0 : null,
+          margin: hasCost ? 0 : null,
           invoiceCount: 0
         };
         existing.qty += item.quantity;
         existing.revenue += itemRevenue;
-        existing.cost += itemCost;
-        existing.profit += itemProfit;
-        existing.margin = existing.revenue > 0 ? (existing.profit / existing.revenue) * 100 : 0;
+        if (hasCost && existing.cost !== null && itemCost !== null) {
+          existing.cost += itemCost;
+          existing.profit = existing.revenue - existing.cost;
+          existing.margin = existing.revenue > 0 ? (existing.profit / existing.revenue) * 100 : 0;
+        } else {
+          existing.cost = null;
+          existing.profit = null;
+          existing.margin = null;
+        }
         existing.invoiceCount += 1;
         map.set(key, existing);
       });
     });
-    return Array.from(map.values()).sort((a, b) => b.profit - a.profit);
+    return Array.from(map.values()).sort((a, b) => (b.profit || 0) - (a.profit || 0));
   }, [filteredSales, products]);
 
   const categories: Array<{ id: MisCategory; label: string; icon: any; count: number }> = [
@@ -382,9 +387,9 @@ export const MisReports: React.FC<MisReportsProps> = ({
                         <td className="p-2.5 text-center font-semibold">{item.invoiceCount}</td>
                         <td className="p-2.5 text-center font-bold text-emerald-700">{item.qty}</td>
                         <td className="p-2.5 text-right font-mono font-semibold text-slate-900">{item.revenue.toFixed(2)}</td>
-                        <td className="p-2.5 text-right font-mono text-slate-600">{item.cost.toFixed(2)}</td>
-                        <td className="p-2.5 text-right font-mono font-bold text-emerald-700">{item.profit.toFixed(2)}</td>
-                        <td className="p-2.5 text-right font-mono font-bold text-blue-700">{item.margin.toFixed(1)}%</td>
+                        <td className="p-2.5 text-right font-mono text-slate-600">{item.cost !== null ? item.cost.toFixed(2) : 'Cost Unavailable'}</td>
+                        <td className="p-2.5 text-right font-mono font-bold text-emerald-700">{item.profit !== null ? item.profit.toFixed(2) : 'N/A'}</td>
+                        <td className="p-2.5 text-right font-mono font-bold text-blue-700">{item.margin !== null ? `${item.margin.toFixed(1)}%` : 'N/A'}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -533,19 +538,25 @@ export const MisReports: React.FC<MisReportsProps> = ({
                   </thead>
                   <tbody className="divide-y divide-slate-100">
                     {filteredSales.map((s) => {
-                      const estCost = (s.items || []).reduce((sum, item) => {
-                        const prod = products.find((p) => p.id === item.productId);
-                        return sum + (item.quantity * (prod?.costPrice || item.unitPrice * 0.7));
-                      }, 0);
-                      const grossMargin = s.grandTotal - estCost;
+                      let allCostAvailable = true;
+                      let totalCost = 0;
+                      (s.items || []).forEach((item) => {
+                        const prod = products.find((p) => p.id === item.productId || p.code === item.productCode);
+                        if (prod && prod.costPrice > 0) {
+                          totalCost += item.quantity * prod.costPrice;
+                        } else {
+                          allCostAvailable = false;
+                        }
+                      });
+                      const grossMargin = allCostAvailable ? (s.grandTotal - totalCost) : null;
                       return (
                         <tr key={s.id} className="hover:bg-slate-50">
                           <td className="p-2.5 font-mono font-bold text-blue-600">{s.invoiceNumber}</td>
                           <td className="p-2.5">{s.customerName}</td>
                           <td className="p-2.5 text-right font-mono">{s.grandTotal.toFixed(2)}</td>
-                          <td className="p-2.5 text-right font-mono text-slate-500">{estCost.toFixed(2)}</td>
+                          <td className="p-2.5 text-right font-mono text-slate-500">{allCostAvailable ? totalCost.toFixed(2) : 'Cost Unavailable'}</td>
                           <td className="p-2.5 text-right font-mono font-bold text-emerald-600">
-                            {grossMargin.toFixed(2)}
+                            {grossMargin !== null ? grossMargin.toFixed(2) : 'N/A'}
                           </td>
                         </tr>
                       );

@@ -361,19 +361,23 @@ export const Reports: React.FC<ReportsProps> = ({
   // Calculations for Profit Report
   const totalSalesRevenue = filteredSales.reduce((sum, s) => sum + s.grandTotal, 0);
 
-  // Estimate COGS based on costPrice of sold items
+  // Calculate COGS based on actual costPrice of sold items
   let cogs = 0;
+  let allCostsAvailable = true;
   filteredSales.forEach((s) => {
     s.items.forEach((item) => {
       const prod = products.find((p) => p.id === item.productId || p.code === item.productCode);
-      const unitCost = prod ? prod.costPrice : item.unitPrice * 0.7;
-      cogs += item.quantity * unitCost;
+      if (prod && prod.costPrice > 0) {
+        cogs += item.quantity * prod.costPrice;
+      } else {
+        allCostsAvailable = false;
+      }
     });
   });
 
-  const grossProfit = totalSalesRevenue - cogs;
+  const grossProfit = allCostsAvailable ? (totalSalesRevenue - cogs) : null;
   const totalExpenses = filteredExpenses.reduce((sum, e) => sum + e.amount, 0);
-  const netProfit = grossProfit - totalExpenses;
+  const netProfit = grossProfit !== null ? (grossProfit - totalExpenses) : null;
 
   // Calculations for Stock
   const totalStockCostVal = products.reduce((sum, p) => sum + p.currentStock * p.costPrice, 0);
@@ -1660,14 +1664,14 @@ export const Reports: React.FC<ReportsProps> = ({
               <div className="flex justify-between items-center text-slate-600">
                 <span>Less: Cost of Goods Sold (COGS):</span>
                 <span className="text-rose-600">
-                  - {settings.currencySymbol} {cogs.toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                  {allCostsAvailable ? `- ${settings.currencySymbol} ${cogs.toLocaleString('en-US', { minimumFractionDigits: 2 })}` : 'Cost Unavailable'}
                 </span>
               </div>
 
               <div className="flex justify-between items-center font-extrabold text-slate-900 pt-2 border-t border-slate-300">
                 <span>Gross Operating Profit:</span>
                 <span>
-                  {settings.currencySymbol} {grossProfit.toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                  {grossProfit !== null ? `${settings.currencySymbol} ${grossProfit.toLocaleString('en-US', { minimumFractionDigits: 2 })}` : 'N/A'}
                 </span>
               </div>
 
@@ -1680,8 +1684,8 @@ export const Reports: React.FC<ReportsProps> = ({
 
               <div className="flex justify-between items-center text-xl font-black pt-3 border-t-2 border-slate-900 text-slate-950">
                 <span>Net Business Profit:</span>
-                <span className={netProfit >= 0 ? 'text-emerald-600' : 'text-rose-600'}>
-                  {settings.currencySymbol} {netProfit.toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                <span className={netProfit !== null && netProfit >= 0 ? 'text-emerald-600' : 'text-rose-600'}>
+                  {netProfit !== null ? `${settings.currencySymbol} ${netProfit.toLocaleString('en-US', { minimumFractionDigits: 2 })}` : 'N/A'}
                 </span>
               </div>
             </div>
