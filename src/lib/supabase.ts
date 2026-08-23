@@ -730,6 +730,19 @@ export const SupabaseSyncService = {
   // --- ATOMIC NUMBER GENERATION FROM SUPABASE DATABASE ---
   async generateNextSalesInvoiceNumber(companyId: string): Promise<string> {
     const client = getSupabaseClient();
+    if (client) {
+      try {
+        const { data, error } = await client.rpc('generate_next_sales_invoice_number_rpc', {
+          p_company_id: companyId
+        });
+        if (!error && data) {
+          return data as string;
+        }
+      } catch (e) {
+        console.warn('RPC generate_next_sales_invoice_number_rpc call failed, falling back:', e);
+      }
+    }
+
     const year = new Date().getFullYear();
     const prefix = `INV-${year}-`;
     let maxSeq = 0;
@@ -759,6 +772,19 @@ export const SupabaseSyncService = {
 
   async generateNextPurchaseNumber(companyId: string): Promise<string> {
     const client = getSupabaseClient();
+    if (client) {
+      try {
+        const { data, error } = await client.rpc('generate_next_purchase_number_rpc', {
+          p_company_id: companyId
+        });
+        if (!error && data) {
+          return data as string;
+        }
+      } catch (e) {
+        console.warn('RPC generate_next_purchase_number_rpc call failed, falling back:', e);
+      }
+    }
+
     const year = new Date().getFullYear();
     const prefix = `PUR-${year}-`;
     let maxSeq = 0;
