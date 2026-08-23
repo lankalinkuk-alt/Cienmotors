@@ -10,7 +10,9 @@ import {
   Expense,
   Company,
   AppSettings,
-  AppUser
+  AppUser,
+  PdcTransaction,
+  JournalEntry
 } from '../types';
 
 let cachedClient: SupabaseClient | null = null;
@@ -725,8 +727,154 @@ export const SupabaseSyncService = {
     }
   },
 
+  // --- ATOMIC NUMBER GENERATION FROM SUPABASE DATABASE ---
+  async generateNextSalesInvoiceNumber(companyId: string): Promise<string> {
+    const client = getSupabaseClient();
+    const year = new Date().getFullYear();
+    const prefix = `INV-${year}-`;
+    let maxSeq = 0;
+
+    if (client) {
+      try {
+        const { data } = await client
+          .from('busy_ufo_sales')
+          .select('invoice_number')
+          .eq('company_id', companyId)
+          .like('invoice_number', `${prefix}%`);
+
+        if (data) {
+          for (const row of data) {
+            if (row.invoice_number && row.invoice_number.startsWith(prefix)) {
+              const num = parseInt(row.invoice_number.replace(prefix, ''), 10);
+              if (!isNaN(num) && num > maxSeq) maxSeq = num;
+            }
+          }
+        }
+      } catch (e) {
+        console.warn('Error querying next sales invoice number from Supabase:', e);
+      }
+    }
+    return `${prefix}${String(maxSeq + 1).padStart(4, '0')}`;
+  },
+
+  async generateNextPurchaseNumber(companyId: string): Promise<string> {
+    const client = getSupabaseClient();
+    const year = new Date().getFullYear();
+    const prefix = `PUR-${year}-`;
+    let maxSeq = 0;
+
+    if (client) {
+      try {
+        const { data } = await client
+          .from('busy_ufo_purchases')
+          .select('purchase_number')
+          .eq('company_id', companyId)
+          .like('purchase_number', `${prefix}%`);
+
+        if (data) {
+          for (const row of data) {
+            if (row.purchase_number && row.purchase_number.startsWith(prefix)) {
+              const num = parseInt(row.purchase_number.replace(prefix, ''), 10);
+              if (!isNaN(num) && num > maxSeq) maxSeq = num;
+            }
+          }
+        }
+      } catch (e) {
+        console.warn('Error querying next purchase number from Supabase:', e);
+      }
+    }
+    return `${prefix}${String(maxSeq + 1).padStart(4, '0')}`;
+  },
+
+  async generateNextReceiptNumber(companyId: string): Promise<string> {
+    const client = getSupabaseClient();
+    const year = new Date().getFullYear();
+    const prefix = `REC-${year}-`;
+    let maxSeq = 0;
+
+    if (client) {
+      try {
+        const { data } = await client
+          .from('busy_ufo_customer_receipts')
+          .select('receipt_number')
+          .eq('company_id', companyId)
+          .like('receipt_number', `${prefix}%`);
+
+        if (data) {
+          for (const row of data) {
+            if (row.receipt_number && row.receipt_number.startsWith(prefix)) {
+              const num = parseInt(row.receipt_number.replace(prefix, ''), 10);
+              if (!isNaN(num) && num > maxSeq) maxSeq = num;
+            }
+          }
+        }
+      } catch (e) {
+        console.warn('Error querying next receipt number from Supabase:', e);
+      }
+    }
+    return `${prefix}${String(maxSeq + 1).padStart(4, '0')}`;
+  },
+
+  async generateNextPaymentNumber(companyId: string): Promise<string> {
+    const client = getSupabaseClient();
+    const year = new Date().getFullYear();
+    const prefix = `PAY-${year}-`;
+    let maxSeq = 0;
+
+    if (client) {
+      try {
+        const { data } = await client
+          .from('busy_ufo_supplier_payments')
+          .select('payment_number')
+          .eq('company_id', companyId)
+          .like('payment_number', `${prefix}%`);
+
+        if (data) {
+          for (const row of data) {
+            if (row.payment_number && row.payment_number.startsWith(prefix)) {
+              const num = parseInt(row.payment_number.replace(prefix, ''), 10);
+              if (!isNaN(num) && num > maxSeq) maxSeq = num;
+            }
+          }
+        }
+      } catch (e) {
+        console.warn('Error querying next payment number from Supabase:', e);
+      }
+    }
+    return `${prefix}${String(maxSeq + 1).padStart(4, '0')}`;
+  },
+
+  async generateNextExpenseNumber(companyId: string): Promise<string> {
+    const client = getSupabaseClient();
+    const year = new Date().getFullYear();
+    const prefix = `EXP-${year}-`;
+    let maxSeq = 0;
+
+    if (client) {
+      try {
+        const { data } = await client
+          .from('busy_ufo_expenses')
+          .select('expense_number')
+          .eq('company_id', companyId)
+          .like('expense_number', `${prefix}%`);
+
+        if (data) {
+          for (const row of data) {
+            if (row.expense_number && row.expense_number.startsWith(prefix)) {
+              const num = parseInt(row.expense_number.replace(prefix, ''), 10);
+              if (!isNaN(num) && num > maxSeq) maxSeq = num;
+            }
+          }
+        }
+      } catch (e) {
+        console.warn('Error querying next expense number from Supabase:', e);
+      }
+    }
+    return `${prefix}${String(maxSeq + 1).padStart(4, '0')}`;
+  },
+
   // --- SALES INVOICES ---
-  async syncSaleInvoice(sale: SaleInvoice): Promise<{ success: boolean; error?: string; isDuplicate?: boolean }> {
+  async syncSaleInvoice(sale: SaleInvoice): Promise<{ success: boolean; error?: string; isDuplicate?: boolean; existingData?: SaleInvoice }> {
     const client = getSupabaseClient();
     if (!client) return { success: false, error: 'Supabase not configured' };
 
@@ -739,10 +887,61 @@ export const SupabaseSyncService = {
     try {
       await ensureCompanyExists(client, sale.companyId || 'comp-1');
 
+      // 1. Persistent Idempotency Check by request_id
+      const { data: existingSale } = await client
+        .from('busy_ufo_sales')
+        .select('*')
+        .eq('request_id', reqId)
+        .maybeSingle();
+
+      if (existingSale) {
+        console.info(`Request ID "${reqId}" already processed in database. Returning existing sale.`);
+        return {
+          success: true,
+          isDuplicate: true,
+          existingData: {
+            id: existingSale.id,
+            requestId: existingSale.request_id || existingSale.id,
+            companyId: existingSale.company_id || 'comp-1',
+            invoiceNumber: existingSale.invoice_number,
+            date: existingSale.invoice_date,
+            customerId: existingSale.customer_id || undefined,
+            customerName: existingSale.customer_name,
+            type: existingSale.sale_type as 'CASH' | 'CREDIT',
+            items: sale.items || [],
+            subtotal: Number(existingSale.total_amount || 0),
+            discount: Number(existingSale.overall_discount || 0),
+            grandTotal: Number(existingSale.grand_total || 0),
+            paidAmount: Number(existingSale.paid_amount || 0),
+            dueAmount: Number(existingSale.due_amount || 0),
+            notes: existingSale.notes || '',
+            createdAt: existingSale.created_at
+          }
+        };
+      }
+
+      // 2. Concurrency-safe Invoice Number Assignment
+      let finalInvoiceNum = sale.invoiceNumber;
+      if (!finalInvoiceNum) {
+        finalInvoiceNum = await this.generateNextSalesInvoiceNumber(sale.companyId || 'comp-1');
+      } else {
+        const { data: numCheck } = await client
+          .from('busy_ufo_sales')
+          .select('id')
+          .eq('company_id', sale.companyId || 'comp-1')
+          .eq('invoice_number', finalInvoiceNum)
+          .neq('id', sale.id)
+          .maybeSingle();
+
+        if (numCheck) {
+          finalInvoiceNum = await this.generateNextSalesInvoiceNumber(sale.companyId || 'comp-1');
+        }
+      }
+
       const salePayload = {
         id: sale.id,
         request_id: reqId,
-        invoice_number: sale.invoiceNumber,
+        invoice_number: finalInvoiceNum,
         invoice_date: sale.date,
         customer_id: sale.customerId || null,
         customer_name: sale.customerName,
@@ -763,9 +962,8 @@ export const SupabaseSyncService = {
         .upsert(salePayload, { onConflict: 'id' });
 
       if (saleError) {
-        // If unique constraint violation on request_id, verify if the transaction already exists
         if (saleError.message?.includes('request_id') || saleError.code === '23505') {
-          console.info(`Request ID "${reqId}" already processed by database. Database guarantees uniqueness.`);
+          console.info(`Request ID "${reqId}" unique constraint caught duplicate transaction.`);
           return { success: true, isDuplicate: true };
         }
         console.warn('Supabase sale sync error:', saleError);
@@ -829,7 +1027,7 @@ export const SupabaseSyncService = {
   },
 
   // --- PURCHASES ---
-  async syncPurchaseInvoice(purchase: PurchaseInvoice): Promise<{ success: boolean; error?: string; isDuplicate?: boolean }> {
+  async syncPurchaseInvoice(purchase: PurchaseInvoice): Promise<{ success: boolean; error?: string; isDuplicate?: boolean; existingData?: PurchaseInvoice }> {
     const client = getSupabaseClient();
     if (!client) return { success: false, error: 'Supabase not configured' };
 
@@ -842,10 +1040,61 @@ export const SupabaseSyncService = {
     try {
       await ensureCompanyExists(client, purchase.companyId || 'comp-1');
 
+      // 1. Persistent Idempotency Check
+      const { data: existingPur } = await client
+        .from('busy_ufo_purchases')
+        .select('*')
+        .eq('request_id', reqId)
+        .maybeSingle();
+
+      if (existingPur) {
+        console.info(`Request ID "${reqId}" already processed in database. Returning existing purchase.`);
+        return {
+          success: true,
+          isDuplicate: true,
+          existingData: {
+            id: existingPur.id,
+            requestId: existingPur.request_id || existingPur.id,
+            companyId: existingPur.company_id || 'comp-1',
+            purchaseNumber: existingPur.purchase_number,
+            date: existingPur.purchase_date,
+            supplierId: existingPur.supplier_id || '',
+            supplierName: existingPur.supplier_name,
+            type: existingPur.purchase_type as 'CASH' | 'CREDIT',
+            items: purchase.items || [],
+            subtotal: Number(existingPur.total_amount || 0),
+            discount: Number(existingPur.overall_discount || 0),
+            grandTotal: Number(existingPur.grand_total || 0),
+            paidAmount: Number(existingPur.paid_amount || 0),
+            dueAmount: Number(existingPur.due_amount || 0),
+            notes: existingPur.notes || '',
+            createdAt: existingPur.created_at
+          }
+        };
+      }
+
+      // 2. Concurrency-safe Purchase Number Assignment
+      let finalPurNum = purchase.purchaseNumber;
+      if (!finalPurNum) {
+        finalPurNum = await this.generateNextPurchaseNumber(purchase.companyId || 'comp-1');
+      } else {
+        const { data: numCheck } = await client
+          .from('busy_ufo_purchases')
+          .select('id')
+          .eq('company_id', purchase.companyId || 'comp-1')
+          .eq('purchase_number', finalPurNum)
+          .neq('id', purchase.id)
+          .maybeSingle();
+
+        if (numCheck) {
+          finalPurNum = await this.generateNextPurchaseNumber(purchase.companyId || 'comp-1');
+        }
+      }
+
       const purchasePayload = {
         id: purchase.id,
         request_id: reqId,
-        purchase_number: purchase.purchaseNumber,
+        purchase_number: finalPurNum,
         purchase_date: purchase.date,
         supplier_id: purchase.supplierId || null,
         supplier_name: purchase.supplierName,
@@ -867,7 +1116,7 @@ export const SupabaseSyncService = {
 
       if (purError) {
         if (purError.message?.includes('request_id') || purError.code === '23505') {
-          console.info(`Request ID "${reqId}" already processed by database. Database guarantees uniqueness.`);
+          console.info(`Request ID "${reqId}" unique constraint caught duplicate transaction.`);
           return { success: true, isDuplicate: true };
         }
         console.warn('Supabase purchase sync error:', purError);
@@ -930,7 +1179,7 @@ export const SupabaseSyncService = {
   },
 
   // --- RECEIPTS, PAYMENTS & EXPENSES ---
-  async syncReceipt(receipt: CustomerReceipt): Promise<{ success: boolean; error?: string; isDuplicate?: boolean }> {
+  async syncReceipt(receipt: CustomerReceipt): Promise<{ success: boolean; error?: string; isDuplicate?: boolean; existingData?: CustomerReceipt }> {
     const client = getSupabaseClient();
     if (!client) return { success: false, error: 'Supabase not configured' };
 
@@ -942,10 +1191,57 @@ export const SupabaseSyncService = {
 
     try {
       await ensureCompanyExists(client, receipt.companyId || 'comp-1');
+
+      // 1. Persistent Idempotency Check
+      const { data: existingRec } = await client
+        .from('busy_ufo_customer_receipts')
+        .select('*')
+        .eq('request_id', reqId)
+        .maybeSingle();
+
+      if (existingRec) {
+        return {
+          success: true,
+          isDuplicate: true,
+          existingData: {
+            id: existingRec.id,
+            requestId: existingRec.request_id || existingRec.id,
+            companyId: existingRec.company_id || 'comp-1',
+            receiptNumber: existingRec.receipt_number,
+            date: existingRec.date,
+            customerId: existingRec.customer_id || '',
+            customerName: existingRec.customer_name,
+            amount: Number(existingRec.amount || 0),
+            paymentMode: (existingRec.payment_method || 'CASH') as 'CASH' | 'BANK_TRANSFER' | 'CHEQUE',
+            referenceNo: existingRec.reference_no || '',
+            notes: existingRec.notes || '',
+            createdAt: existingRec.created_at
+          }
+        };
+      }
+
+      // 2. Concurrency-safe Receipt Number Assignment
+      let finalRecNum = receipt.receiptNumber;
+      if (!finalRecNum) {
+        finalRecNum = await this.generateNextReceiptNumber(receipt.companyId || 'comp-1');
+      } else {
+        const { data: numCheck } = await client
+          .from('busy_ufo_customer_receipts')
+          .select('id')
+          .eq('company_id', receipt.companyId || 'comp-1')
+          .eq('receipt_number', finalRecNum)
+          .neq('id', receipt.id)
+          .maybeSingle();
+
+        if (numCheck) {
+          finalRecNum = await this.generateNextReceiptNumber(receipt.companyId || 'comp-1');
+        }
+      }
+
       const payload = {
         id: receipt.id,
         request_id: reqId,
-        receipt_number: receipt.receiptNumber,
+        receipt_number: finalRecNum,
         date: receipt.date,
         customer_id: receipt.customerId || null,
         customer_name: receipt.customerName,
@@ -986,7 +1282,7 @@ export const SupabaseSyncService = {
     }
   },
 
-  async syncPayment(payment: SupplierPayment): Promise<{ success: boolean; error?: string; isDuplicate?: boolean }> {
+  async syncPayment(payment: SupplierPayment): Promise<{ success: boolean; error?: string; isDuplicate?: boolean; existingData?: SupplierPayment }> {
     const client = getSupabaseClient();
     if (!client) return { success: false, error: 'Supabase not configured' };
 
@@ -998,10 +1294,57 @@ export const SupabaseSyncService = {
 
     try {
       await ensureCompanyExists(client, payment.companyId || 'comp-1');
+
+      // 1. Persistent Idempotency Check
+      const { data: existingPay } = await client
+        .from('busy_ufo_supplier_payments')
+        .select('*')
+        .eq('request_id', reqId)
+        .maybeSingle();
+
+      if (existingPay) {
+        return {
+          success: true,
+          isDuplicate: true,
+          existingData: {
+            id: existingPay.id,
+            requestId: existingPay.request_id || existingPay.id,
+            companyId: existingPay.company_id || 'comp-1',
+            paymentNumber: existingPay.payment_number,
+            date: existingPay.date,
+            supplierId: existingPay.supplier_id || '',
+            supplierName: existingPay.supplier_name,
+            amount: Number(existingPay.amount || 0),
+            paymentMode: (existingPay.payment_method || 'CASH') as 'CASH' | 'BANK_TRANSFER' | 'CHEQUE',
+            referenceNo: existingPay.reference_no || '',
+            notes: existingPay.notes || '',
+            createdAt: existingPay.created_at
+          }
+        };
+      }
+
+      // 2. Concurrency-safe Payment Number Assignment
+      let finalPayNum = payment.paymentNumber;
+      if (!finalPayNum) {
+        finalPayNum = await this.generateNextPaymentNumber(payment.companyId || 'comp-1');
+      } else {
+        const { data: numCheck } = await client
+          .from('busy_ufo_supplier_payments')
+          .select('id')
+          .eq('company_id', payment.companyId || 'comp-1')
+          .eq('payment_number', finalPayNum)
+          .neq('id', payment.id)
+          .maybeSingle();
+
+        if (numCheck) {
+          finalPayNum = await this.generateNextPaymentNumber(payment.companyId || 'comp-1');
+        }
+      }
+
       const payload = {
         id: payment.id,
         request_id: reqId,
-        payment_number: payment.paymentNumber,
+        payment_number: finalPayNum,
         date: payment.date,
         supplier_id: payment.supplierId || null,
         supplier_name: payment.supplierName,
@@ -1042,7 +1385,7 @@ export const SupabaseSyncService = {
     }
   },
 
-  async syncExpense(expense: Expense): Promise<{ success: boolean; error?: string; isDuplicate?: boolean }> {
+  async syncExpense(expense: Expense): Promise<{ success: boolean; error?: string; isDuplicate?: boolean; existingData?: Expense }> {
     const client = getSupabaseClient();
     if (!client) return { success: false, error: 'Supabase not configured' };
 
@@ -1054,10 +1397,55 @@ export const SupabaseSyncService = {
 
     try {
       await ensureCompanyExists(client, expense.companyId || 'comp-1');
+
+      // 1. Persistent Idempotency Check
+      const { data: existingExp } = await client
+        .from('busy_ufo_expenses')
+        .select('*')
+        .eq('request_id', reqId)
+        .maybeSingle();
+
+      if (existingExp) {
+        return {
+          success: true,
+          isDuplicate: true,
+          existingData: {
+            id: existingExp.id,
+            requestId: existingExp.request_id || existingExp.id,
+            companyId: existingExp.company_id || 'comp-1',
+            expenseNumber: existingExp.expense_number,
+            date: existingExp.date,
+            category: existingExp.category,
+            amount: Number(existingExp.amount || 0),
+            paymentMode: (existingExp.payment_method || 'CASH') as 'CASH' | 'BANK_TRANSFER',
+            notes: existingExp.notes || '',
+            createdAt: existingExp.created_at
+          }
+        };
+      }
+
+      // 2. Concurrency-safe Expense Number Assignment
+      let finalExpNum = expense.expenseNumber;
+      if (!finalExpNum) {
+        finalExpNum = await this.generateNextExpenseNumber(expense.companyId || 'comp-1');
+      } else {
+        const { data: numCheck } = await client
+          .from('busy_ufo_expenses')
+          .select('id')
+          .eq('company_id', expense.companyId || 'comp-1')
+          .eq('expense_number', finalExpNum)
+          .neq('id', expense.id)
+          .maybeSingle();
+
+        if (numCheck) {
+          finalExpNum = await this.generateNextExpenseNumber(expense.companyId || 'comp-1');
+        }
+      }
+
       const payload = {
         id: expense.id,
         request_id: reqId,
-        expense_number: expense.expenseNumber,
+        expense_number: finalExpNum,
         date: expense.date,
         category: expense.category,
         amount: Number(expense.amount || 0),
@@ -1407,6 +1795,190 @@ export const SupabaseSyncService = {
       }));
     } catch (e) {
       console.error('Error fetching expenses from Supabase:', e);
+      return null;
+    }
+  },
+
+  // --- PDC MANAGEMENT SYNC ---
+  async syncPdc(pdc: PdcTransaction): Promise<{ success: boolean; error?: string; isDuplicate?: boolean }> {
+    const client = getSupabaseClient();
+    if (!client) return { success: false, error: 'Supabase not configured' };
+
+    const reqId = pdc.requestId || `req_pdc_${pdc.id}`;
+    if (_inFlightRequests.has(reqId)) {
+      return { success: false, error: 'A transaction with this Request ID is already in-flight.' };
+    }
+    _inFlightRequests.add(reqId);
+
+    try {
+      await ensureCompanyExists(client, pdc.companyId || 'comp-1');
+
+      const payload = {
+        id: pdc.id,
+        request_id: reqId,
+        company_id: pdc.companyId || 'comp-1',
+        type: pdc.type,
+        party_id: pdc.partyId || null,
+        party_type: pdc.partyType,
+        party_name: pdc.partyName,
+        cheque_number: pdc.chequeNumber,
+        bank_name: pdc.bankName,
+        cheque_date: pdc.chequeDate,
+        amount: Number(pdc.amount || 0),
+        status: pdc.status,
+        reference_voucher_no: pdc.referenceVoucherNo || '',
+        notes: pdc.notes || '',
+        cleared_at: pdc.clearedAt || null
+      };
+
+      const { error } = await client.from('busy_ufo_pdcs').upsert(payload, { onConflict: 'id' });
+      if (error) {
+        if (error.message?.includes('request_id') || error.code === '23505') {
+          return { success: true, isDuplicate: true };
+        }
+        return { success: false, error: error.message };
+      }
+      return { success: true };
+    } catch (e: any) {
+      return { success: false, error: e?.message };
+    } finally {
+      _inFlightRequests.delete(reqId);
+    }
+  },
+
+  async deletePdc(id: string): Promise<{ success: boolean; error?: string }> {
+    const client = getSupabaseClient();
+    if (!client) return { success: false, error: 'Supabase not configured' };
+    try {
+      const { error } = await client.from('busy_ufo_pdcs').delete().eq('id', id);
+      if (error) return { success: false, error: error.message };
+      return { success: true };
+    } catch (e: any) {
+      return { success: false, error: e?.message };
+    }
+  },
+
+  async fetchAllRemotePdcs(companyId?: string): Promise<PdcTransaction[] | null> {
+    const client = getSupabaseClient();
+    if (!client) return null;
+    try {
+      let query = client.from('busy_ufo_pdcs').select('*').order('cheque_date', { ascending: true });
+      if (companyId) query = query.eq('company_id', companyId);
+      const { data, error } = await query;
+      if (error || !data) return null;
+      return data.map((row: any) => ({
+        id: row.id,
+        requestId: row.request_id || row.id,
+        companyId: row.company_id || 'comp-1',
+        type: row.type as any,
+        partyId: row.party_id || '',
+        partyType: row.party_type as any,
+        partyName: row.party_name,
+        chequeNumber: row.cheque_number,
+        bankName: row.bank_name,
+        chequeDate: row.cheque_date,
+        amount: Number(row.amount || 0),
+        status: row.status as any,
+        referenceVoucherNo: row.reference_voucher_no || '',
+        notes: row.notes || '',
+        clearedAt: row.cleared_at || undefined,
+        createdAt: row.created_at || new Date().toISOString()
+      }));
+    } catch (e) {
+      console.error('Error fetching PDCs from Supabase:', e);
+      return null;
+    }
+  },
+
+  // --- JOURNAL ENTRIES SYNC ---
+  async syncJournalEntry(entry: JournalEntry): Promise<{ success: boolean; error?: string; isDuplicate?: boolean }> {
+    const client = getSupabaseClient();
+    if (!client) return { success: false, error: 'Supabase not configured' };
+
+    const reqId = entry.requestId || `req_jrn_${entry.id}`;
+    if (_inFlightRequests.has(reqId)) {
+      return { success: false, error: 'A transaction with this Request ID is already in-flight.' };
+    }
+    _inFlightRequests.add(reqId);
+
+    try {
+      await ensureCompanyExists(client, entry.companyId || 'comp-1');
+
+      const entryPayload = {
+        id: entry.id,
+        request_id: reqId,
+        company_id: entry.companyId || 'comp-1',
+        voucher_no: entry.voucherNo,
+        voucher_type: entry.voucherType,
+        voucher_date: entry.voucherDate,
+        narration: entry.narration || '',
+        debit_total: Number(entry.debitTotal || 0),
+        credit_total: Number(entry.creditTotal || 0)
+      };
+
+      const { error: entryError } = await client.from('busy_ufo_journal_entries').upsert(entryPayload, { onConflict: 'id' });
+      if (entryError) {
+        if (entryError.message?.includes('request_id') || entryError.code === '23505') {
+          return { success: true, isDuplicate: true };
+        }
+        return { success: false, error: entryError.message };
+      }
+
+      if (entry.lines && entry.lines.length > 0) {
+        const lineRows = entry.lines.map((l) => ({
+          id: l.id || `${entry.id}_line_${Math.random()}`,
+          entry_id: entry.id,
+          ledger_id: l.ledgerId || null,
+          ledger_name: l.ledgerName,
+          account_group: l.accountGroup || 'General',
+          debit: Number(l.debit || 0),
+          credit: Number(l.credit || 0),
+          particulars: l.particulars || ''
+        }));
+
+        await client.from('busy_ufo_journal_lines').delete().eq('entry_id', entry.id);
+        await client.from('busy_ufo_journal_lines').insert(lineRows);
+      }
+
+      return { success: true };
+    } catch (e: any) {
+      return { success: false, error: e?.message };
+    } finally {
+      _inFlightRequests.delete(reqId);
+    }
+  },
+
+  async fetchAllRemoteJournalEntries(companyId?: string): Promise<JournalEntry[] | null> {
+    const client = getSupabaseClient();
+    if (!client) return null;
+    try {
+      let query = client.from('busy_ufo_journal_entries').select('*, lines:busy_ufo_journal_lines(*)').order('voucher_date', { ascending: false });
+      if (companyId) query = query.eq('company_id', companyId);
+      const { data, error } = await query;
+      if (error || !data) return null;
+      return data.map((row: any) => ({
+        id: row.id,
+        requestId: row.request_id || row.id,
+        companyId: row.company_id || 'comp-1',
+        voucherNo: row.voucher_no,
+        voucherType: row.voucher_type as any,
+        voucherDate: row.voucher_date,
+        narration: row.narration || '',
+        debitTotal: Number(row.debit_total || 0),
+        creditTotal: Number(row.credit_total || 0),
+        lines: (row.lines || []).map((l: any) => ({
+          id: l.id,
+          ledgerId: l.ledger_id || '',
+          ledgerName: l.ledger_name,
+          accountGroup: l.account_group,
+          debit: Number(l.debit || 0),
+          credit: Number(l.credit || 0),
+          particulars: l.particulars || ''
+        })),
+        createdAt: row.created_at || new Date().toISOString()
+      }));
+    } catch (e) {
+      console.error('Error fetching journal entries from Supabase:', e);
       return null;
     }
   },

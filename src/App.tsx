@@ -44,8 +44,85 @@ import { CompanyManagement } from './components/CompanyManagement';
 import { DataImport } from './components/DataImport';
 import { PrintInvoiceModal } from './components/PrintInvoiceModal';
 import { ToastContainer, ToastMessage } from './components/Toast';
+import { ShortcutProvider, useShortcuts } from './lib/ShortcutContext';
+import { QuickSalesModal } from './components/QuickSalesModal';
+import { LedgerModal } from './components/LedgerModal';
+import { ItemHistoryModal } from './components/ItemHistoryModal';
+import { PdcManagement } from './components/PdcManagement';
+import { TrialBalanceView } from './components/TrialBalanceView';
+import { ProfitLossView } from './components/ProfitLossView';
+import { MisReports } from './components/MisReports';
+import { PdcTransaction } from './types';
 
-export default function App() {
+// Component to render shortcut modals
+function GlobalShortcutModals({
+  customers,
+  suppliers,
+  products,
+  settings,
+  activeCompany,
+  onRefresh,
+  addToast
+}: {
+  customers: Customer[];
+  suppliers: Supplier[];
+  products: Product[];
+  settings: AppSettings;
+  activeCompany?: Company;
+  onRefresh: () => void;
+  addToast: (type: 'success' | 'error' | 'info', msg: string) => void;
+}) {
+  const {
+    isQuickSalesOpen,
+    closeQuickSales,
+    isLedgerOpen,
+    selectedLedgerId,
+    closeLedger,
+    isItemHistoryOpen,
+    selectedProductId,
+    closeItemHistory
+  } = useShortcuts();
+
+  return (
+    <>
+      {isQuickSalesOpen && (
+        <QuickSalesModal
+          customers={customers}
+          products={products}
+          settings={settings}
+          company={activeCompany}
+          onClose={closeQuickSales}
+          onSuccess={(msg) => {
+            addToast('success', msg);
+            onRefresh();
+          }}
+          onError={(msg) => addToast('error', msg)}
+        />
+      )}
+
+      {isLedgerOpen && (
+        <LedgerModal
+          customers={customers}
+          suppliers={suppliers}
+          settings={settings}
+          initialLedgerId={selectedLedgerId}
+          onClose={closeLedger}
+        />
+      )}
+
+      {isItemHistoryOpen && (
+        <ItemHistoryModal
+          products={products}
+          settings={settings}
+          initialProductId={selectedProductId}
+          onClose={closeItemHistory}
+        />
+      )}
+    </>
+  );
+}
+
+function AppMain() {
   // Authentication & Session State
   const [session, setSession] = useState<AuthSession | null>(() => AuthService.getCurrentSession());
 
@@ -66,6 +143,7 @@ export default function App() {
   const [receipts, setReceipts] = useState<CustomerReceipt[]>(() => StorageService.getReceipts());
   const [payments, setPayments] = useState<SupplierPayment[]>(() => StorageService.getPayments());
   const [expenses, setExpenses] = useState<Expense[]>(() => StorageService.getExpenses());
+  const [pdcs, setPdcs] = useState<PdcTransaction[]>(() => StorageService.getPdcs());
 
   // Print Invoice Modal State
   const [printingDoc, setPrintingDoc] = useState<{
@@ -165,6 +243,7 @@ export default function App() {
     setReceipts(StorageService.getReceipts(activeCompId));
     setPayments(StorageService.getPayments(activeCompId));
     setExpenses(StorageService.getExpenses(activeCompId));
+    setPdcs(StorageService.getPdcs(activeCompId));
   };
 
   const [isSyncingCloud, setIsSyncingCloud] = useState(false);
@@ -264,16 +343,6 @@ export default function App() {
     window.addEventListener('visibilitychange', handleFocusOrVisible);
     window.addEventListener('focus', handleFocusOrVisible);
 
-    // 4. Background Auto-Sync Interval (Periodic background refresh every 30 seconds)
-    const syncInterval = setInterval(() => {
-      if (document.visibilityState === 'visible' && session?.company?.id) {
-        const creds = getActiveSupabaseCredentials();
-        if (creds.url && creds.key) {
-          performCloudPull(session.company.id, false, false);
-        }
-      }
-    }, 30000);
-
     return () => {
       if (realtimeDebounceTimer) clearTimeout(realtimeDebounceTimer);
       if (refreshTimeout) clearTimeout(refreshTimeout);
@@ -283,7 +352,6 @@ export default function App() {
       window.removeEventListener('ufo_local_storage_change', handleLocalRefresh);
       window.removeEventListener('visibilitychange', handleFocusOrVisible);
       window.removeEventListener('focus', handleFocusOrVisible);
-      clearInterval(syncInterval);
     };
   }, [session?.company?.id]);
 
@@ -826,6 +894,47 @@ export default function App() {
             />
           )}
 
+          {currentPage === 'pdc' && (
+            <PdcManagement
+              pdcs={pdcs}
+              customers={customers}
+              suppliers={suppliers}
+              settings={settings}
+              company={session?.company}
+              onRefresh={() => refreshAllStates(activeCompId)}
+              onSuccess={(msg) => addToast('success', msg)}
+              onError={(msg) => addToast('error', msg)}
+            />
+          )}
+
+          {currentPage === 'trial_balance' && (
+            <TrialBalanceView
+              settings={settings}
+              company={session?.company}
+            />
+          )}
+
+          {currentPage === 'profit_loss' && (
+            <ProfitLossView
+              settings={settings}
+              company={session?.company}
+            />
+          )}
+
+          {currentPage === 'mis_reports' && (
+            <MisReports
+              sales={sales}
+              purchases={purchases}
+              customers={customers}
+              suppliers={suppliers}
+              products={products}
+              expenses={expenses}
+              pdcs={pdcs}
+              settings={settings}
+              company={session?.company}
+            />
+          )}
+
           {currentPage === 'settings' && (
             <Settings
               settings={settings}
@@ -948,6 +1057,17 @@ export default function App() {
       {/* Toast Notification Container */}
       <ToastContainer toasts={toasts} onClose={removeToast} />
 
+      {/* Global Keyboard Shortcut Overlays */}
+      <GlobalShortcutModals
+        customers={customers}
+        suppliers={suppliers}
+        products={products}
+        settings={settings}
+        activeCompany={session?.company}
+        onRefresh={() => refreshAllStates(activeCompId)}
+        addToast={addToast}
+      />
+
       {/* Footer Quick Status Bar */}
       <footer className="hidden lg:flex h-10 bg-white border-t border-slate-200 px-4 lg:px-8 items-center justify-between text-xs font-semibold text-slate-500 shrink-0">
         <div className="flex items-center gap-3">
@@ -965,5 +1085,13 @@ export default function App() {
         </div>
       </footer>
     </div>
+  );
+}
+
+export default function App() {
+  return (
+    <ShortcutProvider>
+      <AppMain />
+    </ShortcutProvider>
   );
 }

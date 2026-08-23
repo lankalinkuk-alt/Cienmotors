@@ -38,6 +38,7 @@ import {
 } from '../types';
 import { checkPermission } from '../lib/permissions';
 import { shareReportViaWhatsApp } from '../lib/whatsapp';
+import { ReportActionsToolbar } from './ReportActionsToolbar';
 
 interface ReportsProps {
   sales: SaleInvoice[];
@@ -370,8 +371,8 @@ export const Reports: React.FC<ReportsProps> = ({
     ...expenses.filter((e) => e.paymentMode === 'CASH').map((e) => ({ date: e.date, ref: e.expenseNumber, desc: `Expense (${e.category})`, type: 'OUT', amount: e.amount }))
   ].filter((row) => row.amount > 0);
 
-  // WhatsApp Report Sharing (Overall)
-  const handleShareReportWhatsApp = () => {
+  // Compute current report title and summary lines
+  const { currentReportTitle, currentReportSummaryText } = useMemo(() => {
     let title = '';
     let lines: string[] = [];
 
@@ -381,6 +382,10 @@ export const Reports: React.FC<ReportsProps> = ({
       const totalPaid = sales.reduce((sum, s) => sum + s.paidAmount, 0);
       const totalDue = sales.reduce((sum, s) => sum + s.dueAmount, 0);
       lines = [
+        `📊 *${settings.companyName || 'Company Name'}*`,
+        `*Sales Summary Report*`,
+        `*Date:* ${new Date().toISOString().split('T')[0]}`,
+        `------------------------------`,
         `• Total Invoices: ${sales.length}`,
         `• Total Revenue: ${settings.currencySymbol} ${totalRev.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
         `• Total Collected: ${settings.currencySymbol} ${totalPaid.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
@@ -394,6 +399,10 @@ export const Reports: React.FC<ReportsProps> = ({
       const totalPaid = purchases.reduce((sum, p) => sum + p.paidAmount, 0);
       const totalDue = purchases.reduce((sum, p) => sum + p.dueAmount, 0);
       lines = [
+        `📊 *${settings.companyName || 'Company Name'}*`,
+        `*Purchase Summary Report*`,
+        `*Date:* ${new Date().toISOString().split('T')[0]}`,
+        `------------------------------`,
         `• Total Purchase Bills: ${purchases.length}`,
         `• Total Purchase Value: ${settings.currencySymbol} ${totalPur.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
         `• Total Paid to Suppliers: ${settings.currencySymbol} ${totalPaid.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
@@ -406,6 +415,10 @@ export const Reports: React.FC<ReportsProps> = ({
       const totalItems = products.reduce((sum, p) => sum + p.currentStock, 0);
       const lowStock = products.filter((p) => p.currentStock <= p.reorderLevel);
       lines = [
+        `📊 *${settings.companyName || 'Company Name'}*`,
+        `*Stock Valuation & Inventory Report*`,
+        `*Date:* ${new Date().toISOString().split('T')[0]}`,
+        `------------------------------`,
         `• Product Categories: ${Array.from(new Set(products.map((p) => p.category))).length}`,
         `• Total Item Types: ${products.length}`,
         `• Total In-Stock Units: ${totalItems}`,
@@ -416,6 +429,10 @@ export const Reports: React.FC<ReportsProps> = ({
     } else if (activeReport === 'CUST_OUT') {
       title = 'Customer Outstanding & Aging Report';
       lines = [
+        `📊 *${settings.companyName || 'Company Name'}*`,
+        `*Customer Outstanding & Aging Report*`,
+        `*Date:* ${new Date().toISOString().split('T')[0]}`,
+        `------------------------------`,
         `• Customers with Balances: ${customerAgingData.length}`,
         `• Total Outstanding Receivables: ${settings.currencySymbol} ${customerAgingTotals.totalReceivables.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
         `\n*Aging Analysis Summary:*`,
@@ -429,6 +446,10 @@ export const Reports: React.FC<ReportsProps> = ({
     } else if (activeReport === 'SUPP_PAY') {
       title = 'Supplier Payables & Aging Report';
       lines = [
+        `📊 *${settings.companyName || 'Company Name'}*`,
+        `*Supplier Payables & Aging Report*`,
+        `*Date:* ${new Date().toISOString().split('T')[0]}`,
+        `------------------------------`,
         `• Suppliers with Balances: ${supplierAgingData.length}`,
         `• Total Vendor Payables: ${settings.currencySymbol} ${supplierAgingTotals.totalPayables.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
         `\n*Aging Analysis Summary:*`,
@@ -445,6 +466,10 @@ export const Reports: React.FC<ReportsProps> = ({
       const totalOut = cashBookRows.filter((r) => r.type === 'OUT').reduce((sum, r) => sum + r.amount, 0);
       const closingCash = settings.initialCashBalance + totalIn - totalOut;
       lines = [
+        `📊 *${settings.companyName || 'Company Name'}*`,
+        `*Cash Book Statement*`,
+        `*Date:* ${new Date().toISOString().split('T')[0]}`,
+        `------------------------------`,
         `• Opening Cash: ${settings.currencySymbol} ${settings.initialCashBalance.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
         `• Total Cash Inflow (+): ${settings.currencySymbol} ${totalIn.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
         `• Total Cash Outflow (-): ${settings.currencySymbol} ${totalOut.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
@@ -453,6 +478,10 @@ export const Reports: React.FC<ReportsProps> = ({
     } else if (activeReport === 'PROFIT') {
       title = 'Profit & Loss Statement';
       lines = [
+        `📊 *${settings.companyName || 'Company Name'}*`,
+        `*Profit & Loss Statement*`,
+        `*Date:* ${new Date().toISOString().split('T')[0]}`,
+        `------------------------------`,
         `• Total Sales Revenue: ${settings.currencySymbol} ${totalSalesRevenue.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
         `• Cost of Goods Sold (COGS): -${settings.currencySymbol} ${cogs.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
         `• Gross Profit: ${settings.currencySymbol} ${grossProfit.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
@@ -462,8 +491,11 @@ export const Reports: React.FC<ReportsProps> = ({
       ];
     }
 
-    shareReportViaWhatsApp(title, lines, settings);
-  };
+    return {
+      currentReportTitle: title,
+      currentReportSummaryText: lines.join('\n')
+    };
+  }, [activeReport, sales, purchases, products, customerAgingData, customerAgingTotals, supplierAgingData, supplierAgingTotals, cashBookRows, settings, totalStockCostVal, totalStockSalesVal, totalSalesRevenue, cogs, grossProfit, totalExpenses, netProfit]);
 
   return (
     <div className="space-y-6 pb-8">
@@ -476,23 +508,11 @@ export const Reports: React.FC<ReportsProps> = ({
           </p>
         </div>
 
-        <div className="flex items-center gap-2">
-          <button
-            onClick={handleShareReportWhatsApp}
-            className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-4 py-2.5 rounded-xl text-xs shadow-xs cursor-pointer transition-colors"
-            title="Share report via WhatsApp"
-          >
-            <MessageCircle className="w-4 h-4 fill-white text-emerald-600" />
-            <span>Send Report via WhatsApp</span>
-          </button>
-          <button
-            onClick={handlePrint}
-            className="flex items-center gap-2 bg-slate-900 hover:bg-slate-800 text-white font-bold px-4 py-2.5 rounded-xl text-xs shadow-xs cursor-pointer transition-colors"
-          >
-            <Printer className="w-4 h-4 text-yellow-400" />
-            <span>Print Current Report</span>
-          </button>
-        </div>
+        <ReportActionsToolbar
+          reportTitle={currentReportTitle}
+          summaryText={currentReportSummaryText}
+          settings={settings}
+        />
       </div>
 
       {/* Report Switcher Tabs */}

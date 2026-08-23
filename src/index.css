@@ -11,8 +11,31 @@
   }
 
   .print-hidden,
-  .print\:hidden {
+  .print\:hidden,
+  .no-print,
+  button,
+  header,
+  aside,
+  nav,
+  .sidebar,
+  .no-print-area {
     display: none !important;
+  }
+
+  /* Show print-only elements */
+  .print-only {
+    display: block !important;
+  }
+
+  /* Reset layout containers for report print */
+  main, .overflow-y-auto, .overflow-x-auto {
+    overflow: visible !important;
+    height: auto !important;
+    max-height: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    box-shadow: none !important;
+    border: none !important;
   }
 
   /* When printing an invoice modal, hide all app layout siblings inside #root */
@@ -57,8 +80,18 @@
   }
 
   /* Prevent page breaks inside table rows and summaries */
-  tr, .avoid-break {
+  tr, .avoid-break, .break-inside-avoid {
     break-inside: avoid !important;
     page-break-inside: avoid !important;
   }
+
+  table {
+    width: 100% !important;
+    border-collapse: collapse !important;
+  }
+
+  th, td {
+    border-bottom: 1px solid #cbd5e1 !important;
+  }
 }
+

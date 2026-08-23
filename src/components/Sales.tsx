@@ -348,7 +348,7 @@ export const Sales: React.FC<SalesProps> = ({
     setIsModalOpen(true);
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
     if (calculatedItems.length === 0) {
@@ -381,7 +381,7 @@ export const Sales: React.FC<SalesProps> = ({
 
     try {
       if (editingInvoice && onUpdateInvoice) {
-        const updated = onUpdateInvoice(editingInvoice.id, {
+        const updated = await onUpdateInvoice(editingInvoice.id, {
           date: invoiceDate,
           customerId: selectedCustomerId || undefined,
           customerName: customCustomerName,
@@ -402,7 +402,7 @@ export const Sales: React.FC<SalesProps> = ({
         setIsModalOpen(false);
         setEditingInvoice(null);
       } else {
-        const newInvoice = onCreateInvoice({
+        const newInvoice = await onCreateInvoice({
           date: invoiceDate,
           customerId: selectedCustomerId || undefined,
           customerName: customCustomerName,

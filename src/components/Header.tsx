@@ -85,7 +85,13 @@ export const Header: React.FC<HeaderProps> = ({
     settings: 'System Settings',
     users: 'Users & Rights Security',
     companies: 'Company Directory & Setup',
-    data_import: 'BUSY Excel Migration & Import'
+    data_import: 'BUSY Excel Migration & Import',
+    pdc: 'PDC Management',
+    trial_balance: 'Trial Balance Report',
+    profit_loss: 'Profit & Loss Statement',
+    mis_reports: 'MIS Reports & Analytics',
+    ledger: 'Ledger Statement',
+    item_history: 'Item Movement History'
   };
 
   const canCreateInvoice = checkPermission(session?.effectivePermissions, 'sales', 'add');

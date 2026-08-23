@@ -15,7 +15,12 @@ import {
   OpeningJournalVoucher,
   Warehouse,
   ImportHistoryRecord,
-  AppUser
+  AppUser,
+  PdcTransaction,
+  PdcStatus,
+  PdcType,
+  JournalEntry,
+  ItemHistoryRecord
 } from '../types';
 import {
   INITIAL_SETTINGS,
@@ -78,6 +83,8 @@ let _inMemoryWarehouses: Warehouse[] = [];
 let _inMemoryOpeningJournals: OpeningJournalVoucher[] = [];
 let _inMemoryImportHistory: ImportHistoryRecord[] = [];
 let _inMemoryUsers: AppUser[] = [];
+let _inMemoryPdcs: PdcTransaction[] = [];
+let _inMemoryJournalEntries: JournalEntry[] = [];
 
 function getSettingsFromStorage(): AppSettings {
   try {
@@ -116,6 +123,19 @@ export const StorageService = {
 
   saveSettings(settings: AppSettings): void {
     saveSettingsToStorage(settings);
+  },
+
+  getCompanyBankAccounts(): string[] {
+    const settings = this.getSettings();
+    if (settings.companyBankAccounts && settings.companyBankAccounts.length > 0) {
+      return settings.companyBankAccounts;
+    }
+    return [
+      'Commercial Bank',
+      'Sampath Bank',
+      'Hatton National Bank (HNB)',
+      'Bank of Ceylon (BOC)'
+    ];
   },
 
   // --- COMPANIES ---
@@ -842,7 +862,7 @@ export const StorageService = {
   },
 
   async createSaleInvoiceAsync(
-    invoiceData: Omit<SaleInvoice, 'id' | 'invoiceNumber' | 'createdAt'> & { id?: string },
+    invoiceData: Omit<SaleInvoice, 'id' | 'invoiceNumber' | 'createdAt'> & { id?: string; invoiceNumber?: string },
     companyId?: string
   ): Promise<{
     success: boolean;
@@ -866,9 +886,7 @@ export const StorageService = {
     }
 
     const targetCompId = invoiceData.companyId || companyId || DEFAULT_COMPANY_ID;
-    const compSales = _inMemorySales.filter((s) => (s.companyId || DEFAULT_COMPANY_ID) === targetCompId);
-    const count = compSales.length + 1;
-    const invNumber = `INV-${new Date().getFullYear()}-${String(count).padStart(4, '0')}`;
+    const invNumber = invoiceData.invoiceNumber || await SupabaseSyncService.generateNextSalesInvoiceNumber(targetCompId);
     const now = new Date().toISOString();
     const requestId = invoiceData.requestId || generateUniqueRequestId('sale');
 
@@ -890,7 +908,21 @@ export const StorageService = {
       };
     }
 
-    // On Supabase success, update in-memory products (deduct stock) and customer outstanding
+    // Handle Idempotency / Duplicate
+    if (syncRes.isDuplicate) {
+      const existing = syncRes.existingData || newSale;
+      const existsInMemory = _inMemorySales.some((s) => s.id === existing.id || s.requestId === existing.requestId);
+      if (!existsInMemory) {
+        _inMemorySales.unshift(existing);
+      }
+      return {
+        success: true,
+        data: existing,
+        message: `Invoice ${existing.invoiceNumber} was already recorded and verified in database.`
+      };
+    }
+
+    // On new Supabase success, update in-memory products (deduct stock) and customer outstanding
     for (const item of newSale.items) {
       const pIdx = _inMemoryProducts.findIndex((p) => p.id === item.productId);
       if (pIdx !== -1) {
@@ -1067,7 +1099,7 @@ export const StorageService = {
   },
 
   async createPurchaseInvoiceAsync(
-    purchaseData: Omit<PurchaseInvoice, 'id' | 'purchaseNumber' | 'createdAt'> & { id?: string },
+    purchaseData: Omit<PurchaseInvoice, 'id' | 'purchaseNumber' | 'createdAt'> & { id?: string; purchaseNumber?: string },
     companyId?: string
   ): Promise<{
     success: boolean;
@@ -1091,9 +1123,7 @@ export const StorageService = {
     }
 
     const targetCompId = purchaseData.companyId || companyId || DEFAULT_COMPANY_ID;
-    const compPurchases = _inMemoryPurchases.filter((p) => (p.companyId || DEFAULT_COMPANY_ID) === targetCompId);
-    const count = compPurchases.length + 1;
-    const purNumber = `PUR-${new Date().getFullYear()}-${String(count).padStart(4, '0')}`;
+    const purNumber = purchaseData.purchaseNumber || await SupabaseSyncService.generateNextPurchaseNumber(targetCompId);
     const now = new Date().toISOString();
     const requestId = purchaseData.requestId || generateUniqueRequestId('pur');
 
@@ -1112,6 +1142,20 @@ export const StorageService = {
       return {
         success: false,
         error: syncRes.error || 'Failed to record purchase bill in database.'
+      };
+    }
+
+    // Handle Idempotency / Duplicate
+    if (syncRes.isDuplicate) {
+      const existing = syncRes.existingData || newPurchase;
+      const existsInMemory = _inMemoryPurchases.some((p) => p.id === existing.id || p.requestId === existing.requestId);
+      if (!existsInMemory) {
+        _inMemoryPurchases.unshift(existing);
+      }
+      return {
+        success: true,
+        data: existing,
+        message: `Purchase bill ${existing.purchaseNumber} was already recorded and verified in database.`
       };
     }
 
@@ -1290,7 +1334,7 @@ export const StorageService = {
   },
 
   async createCustomerReceiptAsync(
-    receiptData: Omit<CustomerReceipt, 'id' | 'receiptNumber' | 'createdAt'> & { id?: string },
+    receiptData: Omit<CustomerReceipt, 'id' | 'receiptNumber' | 'createdAt'> & { id?: string; receiptNumber?: string },
     companyId?: string
   ): Promise<{
     success: boolean;
@@ -1314,9 +1358,7 @@ export const StorageService = {
     }
 
     const targetCompId = receiptData.companyId || companyId || DEFAULT_COMPANY_ID;
-    const compReceipts = _inMemoryReceipts.filter((r) => (r.companyId || DEFAULT_COMPANY_ID) === targetCompId);
-    const count = compReceipts.length + 1;
-    const recNumber = `REC-${new Date().getFullYear()}-${String(count).padStart(4, '0')}`;
+    const recNumber = receiptData.receiptNumber || await SupabaseSyncService.generateNextReceiptNumber(targetCompId);
     const now = new Date().toISOString();
     const requestId = receiptData.requestId || generateUniqueRequestId('rec');
 
@@ -1334,6 +1376,20 @@ export const StorageService = {
       return {
         success: false,
         error: syncRes.error || 'Failed to record customer receipt in database.'
+      };
+    }
+
+    // Handle Idempotency / Duplicate
+    if (syncRes.isDuplicate) {
+      const existing = syncRes.existingData || newReceipt;
+      const existsInMemory = _inMemoryReceipts.some((r) => r.id === existing.id || r.requestId === existing.requestId);
+      if (!existsInMemory) {
+        _inMemoryReceipts.unshift(existing);
+      }
+      return {
+        success: true,
+        data: existing,
+        message: `Customer receipt ${existing.receiptNumber} was already recorded and verified in database.`
       };
     }
 
@@ -1427,7 +1483,7 @@ export const StorageService = {
   },
 
   async createSupplierPaymentAsync(
-    paymentData: Omit<SupplierPayment, 'id' | 'paymentNumber' | 'createdAt'> & { id?: string },
+    paymentData: Omit<SupplierPayment, 'id' | 'paymentNumber' | 'createdAt'> & { id?: string; paymentNumber?: string },
     companyId?: string
   ): Promise<{
     success: boolean;
@@ -1451,9 +1507,7 @@ export const StorageService = {
     }
 
     const targetCompId = paymentData.companyId || companyId || DEFAULT_COMPANY_ID;
-    const compPayments = _inMemoryPayments.filter((p) => (p.companyId || DEFAULT_COMPANY_ID) === targetCompId);
-    const count = compPayments.length + 1;
-    const payNumber = `PAY-${new Date().getFullYear()}-${String(count).padStart(4, '0')}`;
+    const payNumber = paymentData.paymentNumber || await SupabaseSyncService.generateNextPaymentNumber(targetCompId);
     const now = new Date().toISOString();
     const requestId = paymentData.requestId || generateUniqueRequestId('pay');
 
@@ -1471,6 +1525,20 @@ export const StorageService = {
       return {
         success: false,
         error: syncRes.error || 'Failed to record supplier payment in database.'
+      };
+    }
+
+    // Handle Idempotency / Duplicate
+    if (syncRes.isDuplicate) {
+      const existing = syncRes.existingData || newPayment;
+      const existsInMemory = _inMemoryPayments.some((p) => p.id === existing.id || p.requestId === existing.requestId);
+      if (!existsInMemory) {
+        _inMemoryPayments.unshift(existing);
+      }
+      return {
+        success: true,
+        data: existing,
+        message: `Supplier payment ${existing.paymentNumber} was already recorded and verified in database.`
       };
     }
 
@@ -1564,7 +1632,7 @@ export const StorageService = {
   },
 
   async createExpenseAsync(
-    expenseData: Omit<Expense, 'id' | 'expenseNumber' | 'createdAt'> & { id?: string },
+    expenseData: Omit<Expense, 'id' | 'expenseNumber' | 'createdAt'> & { id?: string; expenseNumber?: string },
     companyId?: string
   ): Promise<{
     success: boolean;
@@ -1588,9 +1656,7 @@ export const StorageService = {
     }
 
     const targetCompId = expenseData.companyId || companyId || DEFAULT_COMPANY_ID;
-    const compExpenses = _inMemoryExpenses.filter((e) => (e.companyId || DEFAULT_COMPANY_ID) === targetCompId);
-    const count = compExpenses.length + 1;
-    const expNumber = `EXP-${new Date().getFullYear()}-${String(count).padStart(4, '0')}`;
+    const expNumber = expenseData.expenseNumber || await SupabaseSyncService.generateNextExpenseNumber(targetCompId);
     const now = new Date().toISOString();
     const requestId = expenseData.requestId || generateUniqueRequestId('exp');
 
@@ -1608,6 +1674,20 @@ export const StorageService = {
       return {
         success: false,
         error: syncRes.error || 'Failed to record expense in database.'
+      };
+    }
+
+    // Handle Idempotency / Duplicate
+    if (syncRes.isDuplicate) {
+      const existing = syncRes.existingData || newExpense;
+      const existsInMemory = _inMemoryExpenses.some((e) => e.id === existing.id || e.requestId === existing.requestId);
+      if (!existsInMemory) {
+        _inMemoryExpenses.unshift(existing);
+      }
+      return {
+        success: true,
+        data: existing,
+        message: `Expense ${existing.expenseNumber} was already recorded and verified in database.`
       };
     }
 
@@ -1762,6 +1842,726 @@ export const StorageService = {
 
   saveImportHistory(record: ImportHistoryRecord): void {
     _inMemoryImportHistory.unshift(record);
+  },
+
+  // --- PDC MANAGEMENT ---
+  getPdcs(companyId?: string): PdcTransaction[] {
+    if (!companyId) return _inMemoryPdcs;
+    return _inMemoryPdcs.filter((p) => p.companyId === companyId);
+  },
+
+  async savePdcAsync(
+    pdcData: Partial<PdcTransaction>,
+    companyId?: string
+  ): Promise<{ success: boolean; data?: PdcTransaction; error?: string }> {
+    if (!checkOnline()) {
+      return { success: false, error: 'Internet connection required to save PDC records.' };
+    }
+    const targetCompId = pdcData.companyId || companyId || DEFAULT_COMPANY_ID;
+    const reqId = pdcData.requestId || generateUniqueRequestId('pdc');
+    const now = new Date().toISOString();
+
+    const pdcToSave: PdcTransaction = {
+      id: pdcData.id || `pdc-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+      requestId: reqId,
+      companyId: targetCompId,
+      type: pdcData.type || 'RECEIVED',
+      partyId: pdcData.partyId || '',
+      partyType: pdcData.partyType || 'CUSTOMER',
+      partyName: pdcData.partyName || 'Unknown Party',
+      chequeNumber: pdcData.chequeNumber || '',
+      bankName: pdcData.bankName || '',
+      chequeDate: pdcData.chequeDate || now.split('T')[0],
+      amount: Number(pdcData.amount || 0),
+      status: pdcData.status || 'PENDING',
+      referenceVoucherNo: pdcData.referenceVoucherNo || '',
+      notes: pdcData.notes || '',
+      clearedAt: pdcData.clearedAt,
+      createdAt: pdcData.createdAt || now
+    };
+
+    const syncRes = await SupabaseSyncService.syncPdc(pdcToSave);
+    if (!syncRes.success) {
+      return { success: false, error: syncRes.error || 'Database rejected PDC save.' };
+    }
+
+    const idx = _inMemoryPdcs.findIndex((p) => p.id === pdcToSave.id);
+    if (idx !== -1) {
+      _inMemoryPdcs[idx] = pdcToSave;
+    } else {
+      _inMemoryPdcs.unshift(pdcToSave);
+    }
+
+    return { success: true, data: pdcToSave };
+  },
+
+  async updatePdcStatusAsync(
+    id: string,
+    newStatus: PdcStatus,
+    clearedBankName?: string,
+    companyId?: string
+  ): Promise<{ success: boolean; error?: string }> {
+    if (!checkOnline()) {
+      return { success: false, error: 'Internet connection required to update PDC status.' };
+    }
+    const pdc = _inMemoryPdcs.find((p) => p.id === id);
+    if (!pdc) return { success: false, error: 'PDC record not found.' };
+
+    const updatedPdc: PdcTransaction = {
+      ...pdc,
+      status: newStatus,
+      clearedBankName: clearedBankName || pdc.clearedBankName || pdc.bankName,
+      clearedAt: newStatus === 'CLEARED' ? new Date().toISOString() : undefined
+    };
+
+    const syncRes = await SupabaseSyncService.syncPdc(updatedPdc);
+    if (!syncRes.success) {
+      return { success: false, error: syncRes.error || 'Failed to update PDC status in database.' };
+    }
+
+    const idx = _inMemoryPdcs.findIndex((p) => p.id === id);
+    if (idx !== -1) {
+      _inMemoryPdcs[idx] = updatedPdc;
+    }
+
+    return { success: true };
+  },
+
+  async deletePdcAsync(id: string): Promise<{ success: boolean; error?: string }> {
+    if (!checkOnline()) {
+      return { success: false, error: 'Internet connection required to delete PDC.' };
+    }
+    const syncRes = await SupabaseSyncService.deletePdc(id);
+    if (!syncRes.success) {
+      return { success: false, error: syncRes.error || 'Failed to delete PDC from database.' };
+    }
+    _inMemoryPdcs = _inMemoryPdcs.filter((p) => p.id !== id);
+    return { success: true };
+  },
+
+  // --- JOURNAL ENTRIES & ACCOUNTING ---
+  getJournalEntries(companyId?: string): JournalEntry[] {
+    if (!companyId) return _inMemoryJournalEntries;
+    return _inMemoryJournalEntries.filter((j) => j.companyId === companyId);
+  },
+
+  async createJournalEntryAsync(
+    entryData: Omit<JournalEntry, 'id' | 'createdAt'>,
+    companyId?: string
+  ): Promise<{ success: boolean; data?: JournalEntry; error?: string }> {
+    if (!checkOnline()) {
+      return { success: false, error: 'Internet connection required to save Journal entry.' };
+    }
+    const targetCompId = entryData.companyId || companyId || DEFAULT_COMPANY_ID;
+    const reqId = entryData.requestId || generateUniqueRequestId('jrn');
+    const now = new Date().toISOString();
+
+    const entryToSave: JournalEntry = {
+      ...entryData,
+      id: `jrn-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+      requestId: reqId,
+      companyId: targetCompId,
+      createdAt: now
+    };
+
+    const syncRes = await SupabaseSyncService.syncJournalEntry(entryToSave);
+    if (!syncRes.success) {
+      return { success: false, error: syncRes.error || 'Database rejected Journal entry.' };
+    }
+
+    _inMemoryJournalEntries.unshift(entryToSave);
+    return { success: true, data: entryToSave };
+  },
+
+  // --- LEDGER STATEMENT COMPUTATION ---
+  getLedgerStatement(
+    partyOrLedgerId: string,
+    fromDate?: string,
+    toDate?: string,
+    companyId?: string
+  ) {
+    const activeComp = companyId || DEFAULT_COMPANY_ID;
+    const customers = this.getCustomers(activeComp);
+    const suppliers = this.getSuppliers(activeComp);
+    const sales = this.getSales(activeComp);
+    const purchases = this.getPurchases(activeComp);
+    const receipts = this.getReceipts(activeComp);
+    const payments = this.getPayments(activeComp);
+    const expenses = this.getExpenses(activeComp);
+    const pdcs = this.getPdcs(activeComp);
+    const journals = this.getJournalEntries(activeComp);
+
+    // Identify account/party
+    const customer = customers.find((c) => c.id === partyOrLedgerId || c.name.toLowerCase() === partyOrLedgerId.toLowerCase());
+    const supplier = suppliers.find((s) => s.id === partyOrLedgerId || s.name.toLowerCase() === partyOrLedgerId.toLowerCase());
+
+    let ledgerName = partyOrLedgerId;
+    let accountGroup = 'General Ledger';
+    let openingBal = 0; // positive = Dr, negative = Cr
+
+    if (customer) {
+      ledgerName = customer.name;
+      accountGroup = customer.accountGroup || 'Sundry Debtors';
+      openingBal = Number(customer.openingBalance || 0); // Customer Dr
+    } else if (supplier) {
+      ledgerName = supplier.name;
+      accountGroup = supplier.accountGroup || 'Sundry Creditors';
+      openingBal = -Number(supplier.openingBalance || 0); // Supplier Cr
+    } else if (partyOrLedgerId.toLowerCase().includes('cash')) {
+      ledgerName = 'Cash Account';
+      accountGroup = 'Cash-in-Hand';
+      const settings = this.getSettings();
+      openingBal = Number(settings.initialCashBalance || 0);
+    } else if (partyOrLedgerId.toLowerCase().includes('sales')) {
+      ledgerName = 'Sales Account';
+      accountGroup = 'Sales Accounts';
+    } else if (partyOrLedgerId.toLowerCase().includes('purchase')) {
+      ledgerName = 'Purchase Account';
+      accountGroup = 'Purchase Accounts';
+    }
+
+    interface RawTx {
+      id: string;
+      date: string;
+      voucherNo: string;
+      voucherType: string;
+      particulars: string;
+      debit: number;
+      credit: number;
+    }
+
+    const allTx: RawTx[] = [];
+
+    // Customer / Sales transactions
+    sales.forEach((s) => {
+      const isThisParty = (customer && s.customerId === customer.id) || s.customerName.toLowerCase() === ledgerName.toLowerCase();
+      const isSalesAccount = ledgerName.toLowerCase().includes('sales');
+
+      if (isThisParty) {
+        allTx.push({
+          id: s.id,
+          date: s.date,
+          voucherNo: s.invoiceNumber,
+          voucherType: 'Sale Invoice',
+          particulars: `Sales Invoice to ${s.customerName}`,
+          debit: Number(s.grandTotal || 0),
+          credit: 0
+        });
+        if (s.paidAmount > 0) {
+          allTx.push({
+            id: `${s.id}_pay`,
+            date: s.date,
+            voucherNo: s.invoiceNumber,
+            voucherType: 'Immediate Receipt',
+            particulars: `Payment Received (${s.paymentType})`,
+            debit: 0,
+            credit: Number(s.paidAmount || 0)
+          });
+        }
+      } else if (isSalesAccount) {
+        allTx.push({
+          id: s.id,
+          date: s.date,
+          voucherNo: s.invoiceNumber,
+          voucherType: 'Sale Invoice',
+          particulars: `Sales to ${s.customerName}`,
+          debit: 0,
+          credit: Number(s.subtotal || s.grandTotal || 0)
+        });
+      }
+    });
+
+    // Customer Receipts
+    receipts.forEach((r) => {
+      const isThisParty = (customer && r.customerId === customer.id) || r.customerName.toLowerCase() === ledgerName.toLowerCase();
+      const isCashOrBank = (ledgerName.toLowerCase().includes('cash') && r.paymentMode === 'CASH') ||
+        (ledgerName.toLowerCase().includes('bank') && r.paymentMode !== 'CASH');
+
+      if (isThisParty) {
+        allTx.push({
+          id: r.id,
+          date: r.date,
+          voucherNo: r.receiptNumber,
+          voucherType: 'Receipt Voucher',
+          particulars: `Received via ${r.paymentMode} ${r.referenceNo ? `(Ref: ${r.referenceNo})` : ''}`,
+          debit: 0,
+          credit: Number(r.amount || 0)
+        });
+      } else if (isCashOrBank) {
+        allTx.push({
+          id: r.id,
+          date: r.date,
+          voucherNo: r.receiptNumber,
+          voucherType: 'Receipt Voucher',
+          particulars: `Receipt from ${r.customerName}`,
+          debit: Number(r.amount || 0),
+          credit: 0
+        });
+      }
+    });
+
+    // Supplier / Purchase transactions
+    purchases.forEach((p) => {
+      const isThisParty = (supplier && p.supplierId === supplier.id) || p.supplierName.toLowerCase() === ledgerName.toLowerCase();
+      const isPurchaseAccount = ledgerName.toLowerCase().includes('purchase');
+
+      if (isThisParty) {
+        allTx.push({
+          id: p.id,
+          date: p.date,
+          voucherNo: p.purchaseNumber,
+          voucherType: 'Purchase Bill',
+          particulars: `Purchase from ${p.supplierName}`,
+          debit: 0,
+          credit: Number(p.grandTotal || 0)
+        });
+        if (p.paidAmount > 0) {
+          allTx.push({
+            id: `${p.id}_pay`,
+            date: p.date,
+            voucherNo: p.purchaseNumber,
+            voucherType: 'Immediate Payment',
+            particulars: `Payment Issued (${p.paymentType})`,
+            debit: Number(p.paidAmount || 0),
+            credit: 0
+          });
+        }
+      } else if (isPurchaseAccount) {
+        allTx.push({
+          id: p.id,
+          date: p.date,
+          voucherNo: p.purchaseNumber,
+          voucherType: 'Purchase Bill',
+          particulars: `Purchase from ${p.supplierName}`,
+          debit: Number(p.subtotal || p.grandTotal || 0),
+          credit: 0
+        });
+      }
+    });
+
+    // Supplier Payments
+    payments.forEach((p) => {
+      const isThisParty = (supplier && p.supplierId === supplier.id) || p.supplierName.toLowerCase() === ledgerName.toLowerCase();
+      const isCashOrBank = (ledgerName.toLowerCase().includes('cash') && p.paymentMode === 'CASH') ||
+        (ledgerName.toLowerCase().includes('bank') && p.paymentMode !== 'CASH');
+
+      if (isThisParty) {
+        allTx.push({
+          id: p.id,
+          date: p.date,
+          voucherNo: p.paymentNumber,
+          voucherType: 'Payment Voucher',
+          particulars: `Paid via ${p.paymentMode} ${p.referenceNo ? `(Ref: ${p.referenceNo})` : ''}`,
+          debit: Number(p.amount || 0),
+          credit: 0
+        });
+      } else if (isCashOrBank) {
+        allTx.push({
+          id: p.id,
+          date: p.date,
+          voucherNo: p.paymentNumber,
+          voucherType: 'Payment Voucher',
+          particulars: `Payment to ${p.supplierName}`,
+          debit: 0,
+          credit: Number(p.amount || 0)
+        });
+      }
+    });
+
+    // Expenses
+    expenses.forEach((e) => {
+      const isThisCategory = e.category.toLowerCase() === ledgerName.toLowerCase();
+      const isCashOrBank = (ledgerName.toLowerCase().includes('cash') && e.paymentMode === 'CASH') ||
+        (ledgerName.toLowerCase().includes('bank') && e.paymentMode !== 'CASH');
+
+      if (isThisCategory) {
+        allTx.push({
+          id: e.id,
+          date: e.date,
+          voucherNo: e.expenseNumber,
+          voucherType: 'Expense Voucher',
+          particulars: `${e.category} (${e.notes || 'Expense'})`,
+          debit: Number(e.amount || 0),
+          credit: 0
+        });
+      } else if (isCashOrBank) {
+        allTx.push({
+          id: e.id,
+          date: e.date,
+          voucherNo: e.expenseNumber,
+          voucherType: 'Expense Voucher',
+          particulars: `Expense: ${e.category}`,
+          debit: 0,
+          credit: Number(e.amount || 0)
+        });
+      }
+    });
+
+    // Journal lines
+    journals.forEach((j) => {
+      (j.lines || []).forEach((line) => {
+        if (line.ledgerName.toLowerCase() === ledgerName.toLowerCase() || line.ledgerId === partyOrLedgerId) {
+          allTx.push({
+            id: line.id,
+            date: j.voucherDate,
+            voucherNo: j.voucherNo,
+            voucherType: j.voucherType,
+            particulars: line.particulars || j.narration || 'Journal Entry',
+            debit: Number(line.debit || 0),
+            credit: Number(line.credit || 0)
+          });
+        }
+      });
+    });
+
+    // Sort chronologically
+    allTx.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+
+    // Filter by date range and calculate running balance
+    let periodOpening = openingBal;
+    const finalEntries: Array<{
+      id: string;
+      date: string;
+      voucherNo: string;
+      voucherType: string;
+      particulars: string;
+      debit: number;
+      credit: number;
+      runningBalance: number;
+      runningType: 'Dr' | 'Cr';
+    }> = [];
+
+    let totalDr = 0;
+    let totalCr = 0;
+
+    allTx.forEach((tx) => {
+      if (fromDate && tx.date < fromDate) {
+        periodOpening += (tx.debit - tx.credit);
+        return;
+      }
+      if (toDate && tx.date > toDate) {
+        return;
+      }
+
+      periodOpening += (tx.debit - tx.credit);
+      totalDr += tx.debit;
+      totalCr += tx.credit;
+
+      finalEntries.push({
+        ...tx,
+        runningBalance: Math.abs(periodOpening),
+        runningType: periodOpening >= 0 ? 'Dr' : 'Cr'
+      });
+    });
+
+    return {
+      ledgerName,
+      accountGroup,
+      openingBalance: Math.abs(openingBal),
+      openingType: openingBal >= 0 ? 'Dr' : 'Cr',
+      totalDebit: totalDr,
+      totalCredit: totalCr,
+      closingBalance: Math.abs(periodOpening),
+      closingType: periodOpening >= 0 ? 'Dr' : 'Cr',
+      entries: finalEntries
+    };
+  },
+
+  // --- ITEM HISTORY COMPUTATION ---
+  getItemHistory(
+    productId: string,
+    fromDate?: string,
+    toDate?: string,
+    companyId?: string
+  ): ItemHistoryRecord[] {
+    const activeComp = companyId || DEFAULT_COMPANY_ID;
+    const products = this.getProducts(activeComp);
+    const purchases = this.getPurchases(activeComp);
+    const sales = this.getSales(activeComp);
+
+    const product = products.find((p) => p.id === productId || p.code === productId);
+    if (!product) return [];
+
+    interface RawMovement {
+      date: string;
+      voucherType: string;
+      voucherNo: string;
+      partyName: string;
+      quantityIn: number;
+      quantityOut: number;
+      rate: number;
+      amount: number;
+      notes?: string;
+    }
+
+    const movements: RawMovement[] = [];
+
+    // Opening Stock
+    if (product.openingStock > 0) {
+      movements.push({
+        date: product.createdAt ? product.createdAt.split('T')[0] : '2026-01-01',
+        voucherType: 'Opening Stock',
+        voucherNo: 'INIT-STOCK',
+        partyName: 'Master Product Profile',
+        quantityIn: Number(product.openingStock || 0),
+        quantityOut: 0,
+        rate: Number(product.costPrice || 0),
+        amount: Number(product.openingStock || 0) * Number(product.costPrice || 0),
+        notes: 'Initial Opening Stock'
+      });
+    }
+
+    // Purchases
+    purchases.forEach((pur) => {
+      (pur.items || []).forEach((item) => {
+        if (item.productId === product.id || item.productCode === product.code) {
+          movements.push({
+            date: pur.date,
+            voucherType: 'Purchase Invoice',
+            voucherNo: pur.purchaseNumber,
+            partyName: pur.supplierName,
+            quantityIn: Number(item.quantity || 0),
+            quantityOut: 0,
+            rate: Number(item.unitCost || 0),
+            amount: Number(item.total || 0),
+            notes: `Purchase Bill ${pur.purchaseNumber}`
+          });
+        }
+      });
+    });
+
+    // Sales
+    sales.forEach((sale) => {
+      (sale.items || []).forEach((item) => {
+        if (item.productId === product.id || item.productCode === product.code) {
+          movements.push({
+            date: sale.date,
+            voucherType: 'Sale Invoice',
+            voucherNo: sale.invoiceNumber,
+            partyName: sale.customerName,
+            quantityIn: 0,
+            quantityOut: Number(item.quantity || 0),
+            rate: Number(item.unitPrice || 0),
+            amount: Number(item.total || 0),
+            notes: `Sales Invoice ${sale.invoiceNumber}`
+          });
+        }
+      });
+    });
+
+    // Sort chronologically
+    movements.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+
+    let stockAcc = 0;
+    const history: ItemHistoryRecord[] = [];
+
+    movements.forEach((m) => {
+      stockAcc += (m.quantityIn - m.quantityOut);
+      if (fromDate && m.date < fromDate) return;
+      if (toDate && m.date > toDate) return;
+
+      history.push({
+        ...m,
+        runningStock: stockAcc
+      });
+    });
+
+    return history;
+  },
+
+  // --- TRIAL BALANCE COMPUTATION ---
+  getTrialBalance(fromDate?: string, toDate?: string, companyId?: string) {
+    const activeComp = companyId || DEFAULT_COMPANY_ID;
+    const customers = this.getCustomers(activeComp);
+    const suppliers = this.getSuppliers(activeComp);
+    const sales = this.getSales(activeComp);
+    const purchases = this.getPurchases(activeComp);
+    const receipts = this.getReceipts(activeComp);
+    const payments = this.getPayments(activeComp);
+    const expenses = this.getExpenses(activeComp);
+    const pdcs = this.getPdcs(activeComp);
+
+    // Group-based ledger summaries
+    interface TrialRow {
+      accountGroup: string;
+      ledgerName: string;
+      nature: 'ASSET' | 'LIABILITY' | 'INCOME' | 'EXPENSE' | 'EQUITY';
+      openingDr: number;
+      openingCr: number;
+      periodDr: number;
+      periodCr: number;
+      closingDr: number;
+      closingCr: number;
+    }
+
+    const rows: TrialRow[] = [];
+
+    // 1. Debtors (Customers)
+    customers.forEach((c) => {
+      const stmt = this.getLedgerStatement(c.id, fromDate, toDate, activeComp);
+      const openDr = stmt.openingType === 'Dr' ? stmt.openingBalance : 0;
+      const openCr = stmt.openingType === 'Cr' ? stmt.openingBalance : 0;
+      const closeDr = stmt.closingType === 'Dr' ? stmt.closingBalance : 0;
+      const closeCr = stmt.closingType === 'Cr' ? stmt.closingBalance : 0;
+
+      rows.push({
+        accountGroup: c.accountGroup || 'Sundry Debtors',
+        ledgerName: c.name,
+        nature: 'ASSET',
+        openingDr: openDr,
+        openingCr: openCr,
+        periodDr: stmt.totalDebit,
+        periodCr: stmt.totalCredit,
+        closingDr: closeDr,
+        closingCr: closeCr
+      });
+    });
+
+    // 2. Creditors (Suppliers)
+    suppliers.forEach((s) => {
+      const stmt = this.getLedgerStatement(s.id, fromDate, toDate, activeComp);
+      const openDr = stmt.openingType === 'Dr' ? stmt.openingBalance : 0;
+      const openCr = stmt.openingType === 'Cr' ? stmt.openingBalance : 0;
+      const closeDr = stmt.closingType === 'Dr' ? stmt.closingBalance : 0;
+      const closeCr = stmt.closingType === 'Cr' ? stmt.closingBalance : 0;
+
+      rows.push({
+        accountGroup: s.accountGroup || 'Sundry Creditors',
+        ledgerName: s.name,
+        nature: 'LIABILITY',
+        openingDr: openDr,
+        openingCr: openCr,
+        periodDr: stmt.totalDebit,
+        periodCr: stmt.totalCredit,
+        closingDr: closeDr,
+        closingCr: closeCr
+      });
+    });
+
+    // 3. Cash Account
+    const cashStmt = this.getLedgerStatement('Cash Account', fromDate, toDate, activeComp);
+    rows.push({
+      accountGroup: 'Cash-in-Hand',
+      ledgerName: 'Cash Account',
+      nature: 'ASSET',
+      openingDr: cashStmt.openingType === 'Dr' ? cashStmt.openingBalance : 0,
+      openingCr: cashStmt.openingType === 'Cr' ? cashStmt.openingBalance : 0,
+      periodDr: cashStmt.totalDebit,
+      periodCr: cashStmt.totalCredit,
+      closingDr: cashStmt.closingType === 'Dr' ? cashStmt.closingBalance : 0,
+      closingCr: cashStmt.closingType === 'Cr' ? cashStmt.closingBalance : 0
+    });
+
+    // 4. Sales Account
+    const salesStmt = this.getLedgerStatement('Sales Account', fromDate, toDate, activeComp);
+    rows.push({
+      accountGroup: 'Sales Accounts',
+      ledgerName: 'Sales Revenue',
+      nature: 'INCOME',
+      openingDr: 0,
+      openingCr: 0,
+      periodDr: salesStmt.totalDebit,
+      periodCr: salesStmt.totalCredit,
+      closingDr: salesStmt.closingType === 'Dr' ? salesStmt.closingBalance : 0,
+      closingCr: salesStmt.closingType === 'Cr' ? salesStmt.closingBalance : 0
+    });
+
+    // 5. Purchase Account
+    const purStmt = this.getLedgerStatement('Purchase Account', fromDate, toDate, activeComp);
+    rows.push({
+      accountGroup: 'Purchase Accounts',
+      ledgerName: 'Purchase Cost',
+      nature: 'EXPENSE',
+      openingDr: 0,
+      openingCr: 0,
+      periodDr: purStmt.totalDebit,
+      periodCr: purStmt.totalCredit,
+      closingDr: purStmt.closingType === 'Dr' ? purStmt.closingBalance : 0,
+      closingCr: purStmt.closingType === 'Cr' ? purStmt.closingBalance : 0
+    });
+
+    // 6. Expenses by Category
+    const expCategories: string[] = Array.from(new Set(expenses.map((e) => e.category)));
+    expCategories.forEach((cat: string) => {
+      const expStmt = this.getLedgerStatement(cat, fromDate, toDate, activeComp);
+      rows.push({
+        accountGroup: 'Direct & Indirect Expenses',
+        ledgerName: cat,
+        nature: 'EXPENSE',
+        openingDr: 0,
+        openingCr: 0,
+        periodDr: expStmt.totalDebit,
+        periodCr: expStmt.totalCredit,
+        closingDr: expStmt.closingType === 'Dr' ? expStmt.closingBalance : 0,
+        closingCr: expStmt.closingType === 'Cr' ? expStmt.closingBalance : 0
+      });
+    });
+
+    const totalOpeningDr = rows.reduce((sum, r) => sum + r.openingDr, 0);
+    const totalOpeningCr = rows.reduce((sum, r) => sum + r.openingCr, 0);
+    const totalPeriodDr = rows.reduce((sum, r) => sum + r.periodDr, 0);
+    const totalPeriodCr = rows.reduce((sum, r) => sum + r.periodCr, 0);
+    const totalClosingDr = rows.reduce((sum, r) => sum + r.closingDr, 0);
+    const totalClosingCr = rows.reduce((sum, r) => sum + r.closingCr, 0);
+
+    return {
+      rows,
+      totals: {
+        openingDr: totalOpeningDr,
+        openingCr: totalOpeningCr,
+        periodDr: totalPeriodDr,
+        periodCr: totalPeriodCr,
+        closingDr: totalClosingDr,
+        closingCr: totalClosingCr,
+        isBalanced: Math.abs(totalClosingDr - totalClosingCr) < 0.01
+      }
+    };
+  },
+
+  // --- PROFIT & LOSS COMPUTATION ---
+  getProfitAndLoss(fromDate?: string, toDate?: string, companyId?: string) {
+    const activeComp = companyId || DEFAULT_COMPANY_ID;
+    const sales = this.getSales(activeComp).filter((s) => (!fromDate || s.date >= fromDate) && (!toDate || s.date <= toDate));
+    const purchases = this.getPurchases(activeComp).filter((p) => (!fromDate || p.date >= fromDate) && (!toDate || p.date <= toDate));
+    const expenses = this.getExpenses(activeComp).filter((e) => (!fromDate || e.date >= fromDate) && (!toDate || e.date <= toDate));
+    const products = this.getProducts(activeComp);
+
+    // Sales Revenue
+    const grossSales = sales.reduce((sum, s) => sum + Number(s.subtotal || s.grandTotal || 0), 0);
+    const totalDiscounts = sales.reduce((sum, s) => sum + Number(s.discount || 0), 0);
+    const netRevenue = grossSales - totalDiscounts;
+
+    // COGS = Opening Stock Value + Total Purchases - Closing Stock Value
+    const openingStockVal = products.reduce((sum, p) => sum + (Number(p.openingStock || 0) * Number(p.costPrice || 0)), 0);
+    const totalPurchases = purchases.reduce((sum, p) => sum + Number(p.grandTotal || 0), 0);
+    const closingStockVal = products.reduce((sum, p) => sum + (Number(p.currentStock || 0) * Number(p.costPrice || 0)), 0);
+    const cogs = Math.max(0, openingStockVal + totalPurchases - closingStockVal);
+
+    const grossProfit = netRevenue - cogs;
+
+    // Expenses breakdown
+    const expenseBreakdown: Record<string, number> = {};
+    expenses.forEach((e) => {
+      expenseBreakdown[e.category] = (expenseBreakdown[e.category] || 0) + Number(e.amount || 0);
+    });
+
+    const totalOperatingExpenses = Object.values(expenseBreakdown).reduce((sum, val) => sum + val, 0);
+    const netProfit = grossProfit - totalOperatingExpenses;
+
+    return {
+      grossSales,
+      totalDiscounts,
+      netRevenue,
+      openingStockVal,
+      totalPurchases,
+      closingStockVal,
+      cogs,
+      grossProfit,
+      expenseBreakdown,
+      totalOperatingExpenses,
+      netProfit,
+      isProfit: netProfit >= 0
+    };
   },
 
   // --- USERS IN-MEMORY ---
@@ -1970,7 +2770,9 @@ export const StorageService = {
         remoteReceipts,
         remotePayments,
         remoteExpenses,
-        remoteUsers
+        remoteUsers,
+        remotePdcs,
+        remoteJournals
       ] = await Promise.all([
         SupabaseSyncService.fetchAllRemoteCompanies(),
         SupabaseSyncService.fetchAllRemoteProducts(companyId),
@@ -1981,7 +2783,9 @@ export const StorageService = {
         SupabaseSyncService.fetchAllRemoteReceipts(companyId),
         SupabaseSyncService.fetchAllRemotePayments(companyId),
         SupabaseSyncService.fetchAllRemoteExpenses(companyId),
-        SupabaseSyncService.fetchAllRemoteUsers()
+        SupabaseSyncService.fetchAllRemoteUsers(),
+        SupabaseSyncService.fetchAllRemotePdcs(companyId),
+        SupabaseSyncService.fetchAllRemoteJournalEntries(companyId)
       ]);
 
       const pulledCounts: Record<string, number> = {};
@@ -2034,6 +2838,16 @@ export const StorageService = {
       if (remoteUsers !== null) {
         _inMemoryUsers = remoteUsers;
         pulledCounts.users = remoteUsers.length;
+      }
+
+      if (remotePdcs !== null) {
+        _inMemoryPdcs = remotePdcs;
+        pulledCounts.pdcs = remotePdcs.length;
+      }
+
+      if (remoteJournals !== null) {
+        _inMemoryJournalEntries = remoteJournals;
+        pulledCounts.journals = remoteJournals.length;
       }
 
       return { success: true, pulledCounts };

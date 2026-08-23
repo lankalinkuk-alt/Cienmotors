@@ -18,7 +18,9 @@ import {
   CloudUpload,
   CloudDownload,
   Activity,
-  BookOpen
+  BookOpen,
+  Landmark,
+  Plus
 } from 'lucide-react';
 import { AppSettings, InvoicePrintFormat, AuthSession } from '../types';
 import { SUPABASE_SQL_SCHEMA } from '../lib/sqlExport';
@@ -55,8 +57,38 @@ export const Settings: React.FC<SettingsProps> = ({
   const [isTestingConnection, setIsTestingConnection] = useState(false);
   const [testResult, setTestResult] = useState<ConnectionTestResult | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
-
   const [isPulling, setIsPulling] = useState(false);
+  const [newBankInput, setNewBankInput] = useState('');
+
+  const currentBankAccounts = formData.companyBankAccounts && formData.companyBankAccounts.length > 0
+    ? formData.companyBankAccounts
+    : ['Commercial Bank', 'Sampath Bank', 'Hatton National Bank (HNB)', 'Bank of Ceylon (BOC)'];
+
+  const handleAddBank = () => {
+    const trimmed = newBankInput.trim();
+    if (!trimmed) return;
+    if (currentBankAccounts.some((b) => b.toLowerCase() === trimmed.toLowerCase())) {
+      showToast('info', 'Bank account already exists in list');
+      return;
+    }
+    setFormData({
+      ...formData,
+      companyBankAccounts: [...currentBankAccounts, trimmed]
+    });
+    setNewBankInput('');
+    showToast('success', `Added "${trimmed}" to bank accounts`);
+  };
+
+  const handleRemoveBank = (bankToRemove: string) => {
+    if (currentBankAccounts.length <= 1) {
+      showToast('error', 'At least one company bank account must be maintained.');
+      return;
+    }
+    setFormData({
+      ...formData,
+      companyBankAccounts: currentBankAccounts.filter((b) => b !== bankToRemove)
+    });
+  };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -314,6 +346,69 @@ export const Settings: React.FC<SettingsProps> = ({
                 className="w-full p-2.5 rounded-xl border border-slate-200 text-sm focus:border-blue-500"
               />
             </div>
+          </div>
+        </div>
+
+        {/* Company Bank Accounts Management */}
+        <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs space-y-4">
+          <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+            <div className="flex items-center gap-2">
+              <Landmark className="w-5 h-5 text-emerald-600" />
+              <div>
+                <h3 className="font-bold text-base text-slate-900">
+                  Company Bank Accounts ({currentBankAccounts.length})
+                </h3>
+                <p className="text-xs text-slate-500">
+                  Maintained bank accounts linked to Supplier Payments, Customer Receipts, and Post-Dated Cheque (PDC) clearance
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+            {currentBankAccounts.map((bank, idx) => (
+              <div
+                key={idx}
+                className="flex items-center justify-between p-3 bg-emerald-50/70 border border-emerald-200/80 rounded-xl text-xs font-bold text-emerald-950 shadow-2xs"
+              >
+                <div className="flex items-center gap-2 overflow-hidden">
+                  <Landmark className="w-4 h-4 text-emerald-600 shrink-0" />
+                  <span className="truncate">{bank}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => handleRemoveBank(bank)}
+                  className="p-1 text-emerald-600 hover:text-rose-600 rounded-lg transition-colors cursor-pointer shrink-0"
+                  title="Remove bank account"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            ))}
+          </div>
+
+          <div className="flex items-center gap-2 pt-2">
+            <input
+              type="text"
+              placeholder="e.g. Nations Trust Bank (NTB) - Main Branch"
+              value={newBankInput}
+              onChange={(e) => setNewBankInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  handleAddBank();
+                }
+              }}
+              className="flex-1 p-2.5 rounded-xl border border-slate-200 text-sm focus:border-emerald-500"
+            />
+            <button
+              type="button"
+              onClick={handleAddBank}
+              className="flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-4 py-2.5 rounded-xl text-xs transition-colors cursor-pointer shrink-0"
+            >
+              <Plus className="w-4 h-4" />
+              <span>Add Bank</span>
+            </button>
           </div>
         </div>
 

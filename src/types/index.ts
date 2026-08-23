@@ -228,6 +228,7 @@ export interface CustomerReceipt {
   amount: number;
   paymentMode: 'CASH' | 'BANK_TRANSFER' | 'CHEQUE';
   referenceNo?: string;
+  bankName?: string; // Bank account used for receipt
   notes?: string;
   allocations?: InvoiceAllocation[];
   unallocatedAmount?: number;
@@ -245,6 +246,7 @@ export interface SupplierPayment {
   amount: number;
   paymentMode: 'CASH' | 'BANK_TRANSFER' | 'CHEQUE';
   referenceNo?: string;
+  bankName?: string; // Bank account used for payment
   notes?: string;
   allocations?: BillAllocation[];
   unallocatedAmount?: number;
@@ -278,6 +280,7 @@ export interface AppSettings {
   allowNegativeStock: boolean;
   initialCashBalance: number;
   invoiceNote: string;
+  companyBankAccounts?: string[]; // Array of maintained bank accounts (e.g. Commercial Bank, Sampath Bank, etc.)
   supabaseUrl: string;
   supabaseAnonKey: string;
   defaultPrintFormat?: InvoicePrintFormat;
@@ -299,7 +302,13 @@ export type PageType =
   | 'settings'
   | 'users'
   | 'companies'
-  | 'data_import';
+  | 'data_import'
+  | 'ledger'
+  | 'item_history'
+  | 'trial_balance'
+  | 'profit_loss'
+  | 'mis_reports'
+  | 'pdc';
 
 export type PermissionModule =
   | 'dashboard'
@@ -317,7 +326,10 @@ export type PermissionModule =
   | 'roles'
   | 'companies'
   | 'data_import'
-  | 'audit_logs';
+  | 'audit_logs'
+  | 'pdc'
+  | 'ledger'
+  | 'accounting';
 
 export type PermissionAction =
   | 'view'
@@ -445,14 +457,17 @@ export interface LedgerAccount {
 }
 
 export interface JournalEntryLine {
+  id?: string;
   ledgerId?: string;
-  accountName: string;
-  accountGroup: string;
-  accountType: 'CUSTOMER' | 'SUPPLIER' | 'LEDGER' | 'STOCK';
+  ledgerName?: string;
+  accountName?: string;
+  accountGroup?: string;
+  accountType?: 'CUSTOMER' | 'SUPPLIER' | 'LEDGER' | 'STOCK' | string;
   refId?: string;
   debit: number;
   credit: number;
   narration?: string;
+  particulars?: string;
 }
 
 export interface OpeningJournalVoucher {
@@ -559,4 +574,62 @@ export interface AccountGroupDefinition {
   description: string;
   isSubgroup?: boolean;
 }
+
+export type PdcType = 'RECEIVED' | 'ISSUED';
+
+export type PdcStatus =
+  | 'PENDING'
+  | 'DEPOSITED'
+  | 'CLEARED'
+  | 'BOUNCED'
+  | 'CANCELLED'
+  | 'RETURNED';
+
+export interface PdcTransaction {
+  id: string;
+  requestId?: string;
+  companyId: string;
+  type: PdcType;
+  partyId: string;
+  partyType: 'CUSTOMER' | 'SUPPLIER';
+  partyName: string;
+  chequeNumber: string;
+  bankName: string;
+  clearedBankName?: string; // Company bank account where PDC was deposited/cleared
+  chequeDate: string; // YYYY-MM-DD
+  amount: number;
+  status: PdcStatus;
+  referenceVoucherNo?: string;
+  notes?: string;
+  clearedAt?: string;
+  createdAt: string;
+}
+
+export interface JournalEntry {
+  id: string;
+  requestId?: string;
+  companyId: string;
+  voucherNo: string;
+  voucherType: 'SALES' | 'PURCHASE' | 'RECEIPT' | 'PAYMENT' | 'EXPENSE' | 'JOURNAL' | 'PDC';
+  voucherDate: string;
+  narration?: string;
+  debitTotal: number;
+  creditTotal: number;
+  lines: JournalEntryLine[];
+  createdAt: string;
+}
+
+export interface ItemHistoryRecord {
+  date: string;
+  voucherType: string;
+  voucherNo: string;
+  partyName: string;
+  quantityIn: number;
+  quantityOut: number;
+  rate: number;
+  amount: number;
+  runningStock: number;
+  notes?: string;
+}
+
 

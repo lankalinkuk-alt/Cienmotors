@@ -20,7 +20,9 @@ import {
   ChevronRight,
   Eye,
   X,
-  Check
+  Check,
+  Clock,
+  Landmark
 } from 'lucide-react';
 import {
   CustomerReceipt,
@@ -36,6 +38,7 @@ import {
   AuthSession
 } from '../types';
 import { checkPermission } from '../lib/permissions';
+import { StorageService } from '../lib/storage';
 import { SearchableCustomerSelect, SearchableSupplierSelect } from './SearchableSelect';
 
 interface PaymentsProps {
@@ -76,6 +79,7 @@ export const Payments: React.FC<PaymentsProps> = ({
   session
 }) => {
   const [activeTab, setActiveTab] = useState<'RECEIPTS' | 'PAYMENTS' | 'EXPENSES'>('RECEIPTS');
+  const companyBankAccounts = StorageService.getCompanyBankAccounts();
 
   const canAddReceipt = checkPermission(session?.effectivePermissions, 'customer_receipts', 'add');
   const canDeleteReceipt = checkPermission(session?.effectivePermissions, 'customer_receipts', 'delete');
@@ -101,6 +105,10 @@ export const Payments: React.FC<PaymentsProps> = ({
   const [receiptMode, setReceiptMode] = useState<'CASH' | 'BANK_TRANSFER' | 'CHEQUE'>('CASH');
   const [receiptRef, setReceiptRef] = useState('');
   const [receiptNotes, setReceiptNotes] = useState('');
+  const [receiptChequeNo, setReceiptChequeNo] = useState('');
+  const [receiptChequeDate, setReceiptChequeDate] = useState(new Date().toISOString().split('T')[0]);
+  const [receiptBankName, setReceiptBankName] = useState('');
+  const [receiptIsPdc, setReceiptIsPdc] = useState(false);
   // Map of invoiceId -> allocated amount string/number
   const [invoiceAllocations, setInvoiceAllocations] = useState<Record<string, number>>({});
 
@@ -111,6 +119,10 @@ export const Payments: React.FC<PaymentsProps> = ({
   const [paymentMode, setPaymentMode] = useState<'CASH' | 'BANK_TRANSFER' | 'CHEQUE'>('CASH');
   const [paymentRef, setPaymentRef] = useState('');
   const [paymentNotes, setPaymentNotes] = useState('');
+  const [paymentChequeNo, setPaymentChequeNo] = useState('');
+  const [paymentChequeDate, setPaymentChequeDate] = useState(new Date().toISOString().split('T')[0]);
+  const [paymentBankName, setPaymentBankName] = useState('');
+  const [paymentIsPdc, setPaymentIsPdc] = useState(false);
   // Map of purchaseId -> allocated amount string/number
   const [billAllocations, setBillAllocations] = useState<Record<string, number>>({});
 
@@ -326,14 +338,33 @@ export const Payments: React.FC<PaymentsProps> = ({
       customerName: cust ? cust.name : 'Customer',
       amount: amt,
       paymentMode: receiptMode,
-      referenceNo: receiptRef,
+      referenceNo: receiptChequeNo || receiptRef,
+      bankName: receiptBankName,
       notes: receiptNotes,
       allocations: allocations.length > 0 ? allocations : undefined,
       unallocatedAmount: unallocated > 0 ? unallocated : undefined
     });
 
+    if (receiptMode === 'CHEQUE' || receiptIsPdc) {
+      const chqNum = receiptChequeNo || receiptRef || `CHQ-${rec.receiptNumber}`;
+      StorageService.savePdcAsync({
+        type: 'RECEIVED',
+        partyId: receiptCustomerId,
+        partyType: 'CUSTOMER',
+        partyName: cust ? cust.name : 'Customer',
+        chequeNumber: chqNum,
+        bankName: receiptBankName || 'Bank',
+        chequeDate: receiptChequeDate || new Date().toISOString().split('T')[0],
+        amount: amt,
+        status: 'PENDING',
+        referenceVoucherNo: rec.receiptNumber,
+        notes: `Customer Receipt ${rec.receiptNumber}${receiptNotes ? `: ${receiptNotes}` : ''}`
+      }).catch((err) => console.warn('Auto PDC save error:', err));
+    }
+
+    const pdcNotice = (receiptMode === 'CHEQUE' || receiptIsPdc) ? ' & PDC cheque registered in PDC module' : '';
     const allocText = allocations.length > 0 ? ` & adjusted ${allocations.length} previous bill(s)` : '';
-    showToast('success', `Receipt ${rec.receiptNumber} recorded! Customer balance updated${allocText}.`);
+    showToast('success', `Receipt ${rec.receiptNumber} recorded! Balance updated${allocText}${pdcNotice}.`);
     setIsReceiptModalOpen(false);
     setInvoiceAllocations({});
   };
@@ -392,14 +423,33 @@ export const Payments: React.FC<PaymentsProps> = ({
       supplierName: supp ? supp.name : 'Supplier',
       amount: amt,
       paymentMode: paymentMode,
-      referenceNo: paymentRef,
+      referenceNo: paymentChequeNo || paymentRef,
+      bankName: paymentBankName,
       notes: paymentNotes,
       allocations: allocations.length > 0 ? allocations : undefined,
       unallocatedAmount: unallocated > 0 ? unallocated : undefined
     });
 
+    if (paymentMode === 'CHEQUE' || paymentIsPdc) {
+      const chqNum = paymentChequeNo || paymentRef || `CHQ-${pay.paymentNumber}`;
+      StorageService.savePdcAsync({
+        type: 'ISSUED',
+        partyId: paymentSupplierId,
+        partyType: 'SUPPLIER',
+        partyName: supp ? supp.name : 'Supplier',
+        chequeNumber: chqNum,
+        bankName: paymentBankName || 'Bank',
+        chequeDate: paymentChequeDate || new Date().toISOString().split('T')[0],
+        amount: amt,
+        status: 'PENDING',
+        referenceVoucherNo: pay.paymentNumber,
+        notes: `Supplier Payment ${pay.paymentNumber}${paymentNotes ? `: ${paymentNotes}` : ''}`
+      }).catch((err) => console.warn('Auto PDC save error:', err));
+    }
+
+    const pdcNotice = (paymentMode === 'CHEQUE' || paymentIsPdc) ? ' & PDC cheque registered in PDC module' : '';
     const allocText = allocations.length > 0 ? ` & adjusted ${allocations.length} previous bill(s)` : '';
-    showToast('success', `Payment ${pay.paymentNumber} recorded! Supplier payable updated${allocText}.`);
+    showToast('success', `Payment ${pay.paymentNumber} recorded! Supplier payable updated${allocText}${pdcNotice}.`);
     setIsPaymentModalOpen(false);
     setBillAllocations({});
   };
@@ -442,6 +492,13 @@ export const Payments: React.FC<PaymentsProps> = ({
             onClick={() => {
               setReceiptCustomerId(customers[0]?.id || '');
               setReceiptAmount('');
+              setReceiptRef('');
+              setReceiptNotes('');
+              setReceiptChequeNo('');
+              setReceiptBankName('');
+              setReceiptChequeDate(new Date().toISOString().split('T')[0]);
+              setReceiptIsPdc(false);
+              setReceiptMode('CASH');
               setInvoiceAllocations({});
               setIsReceiptModalOpen(true);
             }}
@@ -456,6 +513,13 @@ export const Payments: React.FC<PaymentsProps> = ({
             onClick={() => {
               setPaymentSupplierId(suppliers[0]?.id || '');
               setPaymentAmount('');
+              setPaymentRef('');
+              setPaymentNotes('');
+              setPaymentChequeNo('');
+              setPaymentBankName('');
+              setPaymentChequeDate(new Date().toISOString().split('T')[0]);
+              setPaymentIsPdc(false);
+              setPaymentMode('CASH');
               setBillAllocations({});
               setIsPaymentModalOpen(true);
             }}
@@ -945,35 +1009,136 @@ export const Payments: React.FC<PaymentsProps> = ({
                 </div>
               )}
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
                 <div>
                   <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
                     Payment Mode
                   </label>
                   <select
                     value={receiptMode}
-                    onChange={(e) => setReceiptMode(e.target.value as any)}
-                    className="w-full p-2.5 rounded-xl border border-slate-200 text-sm bg-white"
+                    onChange={(e) => {
+                      const mode = e.target.value as any;
+                      setReceiptMode(mode);
+                      if (mode === 'CHEQUE') setReceiptIsPdc(true);
+                      if (!receiptBankName && (mode === 'BANK_TRANSFER' || mode === 'CHEQUE')) {
+                        setReceiptBankName(companyBankAccounts[0] || 'Commercial Bank');
+                      }
+                    }}
+                    className="w-full p-2.5 rounded-xl border border-slate-200 text-sm bg-white font-medium"
                   >
                     <option value="CASH">Cash</option>
                     <option value="BANK_TRANSFER">Bank Transfer</option>
-                    <option value="CHEQUE">Cheque</option>
+                    <option value="CHEQUE">Cheque / Post-Dated Cheque (PDC)</option>
                   </select>
                 </div>
 
+                {receiptMode === 'BANK_TRANSFER' && (
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 uppercase mb-1 flex items-center gap-1">
+                      <Landmark className="w-3.5 h-3.5 text-emerald-600" />
+                      <span>Company Bank Account</span>
+                    </label>
+                    <select
+                      value={receiptBankName || companyBankAccounts[0] || 'Commercial Bank'}
+                      onChange={(e) => setReceiptBankName(e.target.value)}
+                      className="w-full p-2.5 rounded-xl border border-slate-200 text-sm bg-white font-bold text-slate-800"
+                    >
+                      {companyBankAccounts.map((bank) => (
+                        <option key={bank} value={bank}>
+                          {bank}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+
                 <div>
                   <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
-                    Reference / Cheque No
+                    Reference / Ref No
                   </label>
                   <input
                     type="text"
                     placeholder="Ref / Chq #"
                     value={receiptRef}
-                    onChange={(e) => setReceiptRef(e.target.value)}
+                    onChange={(e) => {
+                      setReceiptRef(e.target.value);
+                      if (!receiptChequeNo) setReceiptChequeNo(e.target.value);
+                    }}
                     className="w-full p-2.5 rounded-xl border border-slate-200 text-sm font-mono"
                   />
                 </div>
               </div>
+
+              {/* Cheque & PDC Details Expandable Section */}
+              {(receiptMode === 'CHEQUE' || receiptIsPdc) && (
+                <div className="bg-amber-50/80 border border-amber-200 rounded-2xl p-3.5 space-y-3">
+                  <div className="flex items-center justify-between pb-2 border-b border-amber-200/60">
+                    <div className="flex items-center gap-1.5 text-amber-900 font-bold text-xs uppercase tracking-wider">
+                      <Clock className="w-4 h-4 text-amber-600" />
+                      <span>Cheque & Post-Dated Cheque (PDC) Details</span>
+                    </div>
+                    <label className="flex items-center gap-1.5 text-xs font-semibold text-amber-900 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={receiptIsPdc}
+                        onChange={(e) => setReceiptIsPdc(e.target.checked)}
+                        className="rounded text-amber-600 focus:ring-amber-500"
+                      />
+                      <span>Register in PDC Management</span>
+                    </label>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div>
+                      <label className="block text-[11px] font-bold text-amber-900 uppercase mb-1">
+                        Cheque Number *
+                      </label>
+                      <input
+                        type="text"
+                        required={receiptMode === 'CHEQUE' || receiptIsPdc}
+                        placeholder="e.g. 001842"
+                        value={receiptChequeNo}
+                        onChange={(e) => {
+                          setReceiptChequeNo(e.target.value);
+                          if (!receiptRef) setReceiptRef(e.target.value);
+                        }}
+                        className="w-full p-2 rounded-xl border border-amber-300 text-xs font-mono bg-white font-bold text-amber-950"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] font-bold text-amber-900 uppercase mb-1">
+                        Cheque Maturity Date *
+                      </label>
+                      <input
+                        type="date"
+                        required={receiptMode === 'CHEQUE' || receiptIsPdc}
+                        value={receiptChequeDate}
+                        onChange={(e) => setReceiptChequeDate(e.target.value)}
+                        className="w-full p-2 rounded-xl border border-amber-300 text-xs bg-white font-mono font-bold text-amber-950"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] font-bold text-amber-900 uppercase mb-1 flex items-center gap-1">
+                        <Landmark className="w-3.5 h-3.5 text-amber-600" />
+                        <span>Company Bank Account *</span>
+                      </label>
+                      <select
+                        value={receiptBankName || companyBankAccounts[0] || 'Commercial Bank'}
+                        onChange={(e) => setReceiptBankName(e.target.value)}
+                        className="w-full p-2 rounded-xl border border-amber-300 text-xs bg-white font-bold text-amber-950"
+                      >
+                        {companyBankAccounts.map((bank) => (
+                          <option key={bank} value={bank}>
+                            {bank}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                </div>
+              )}
 
               <div>
                 <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
@@ -1224,35 +1389,136 @@ export const Payments: React.FC<PaymentsProps> = ({
                 </div>
               )}
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
                 <div>
                   <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
                     Payment Mode
                   </label>
                   <select
                     value={paymentMode}
-                    onChange={(e) => setPaymentMode(e.target.value as any)}
-                    className="w-full p-2.5 rounded-xl border border-slate-200 text-sm bg-white"
+                    onChange={(e) => {
+                      const mode = e.target.value as any;
+                      setPaymentMode(mode);
+                      if (mode === 'CHEQUE') setPaymentIsPdc(true);
+                      if (!paymentBankName && (mode === 'BANK_TRANSFER' || mode === 'CHEQUE')) {
+                        setPaymentBankName(companyBankAccounts[0] || 'Commercial Bank');
+                      }
+                    }}
+                    className="w-full p-2.5 rounded-xl border border-slate-200 text-sm bg-white font-medium"
                   >
                     <option value="CASH">Cash</option>
                     <option value="BANK_TRANSFER">Bank Transfer</option>
-                    <option value="CHEQUE">Cheque</option>
+                    <option value="CHEQUE">Cheque / Post-Dated Cheque (PDC)</option>
                   </select>
                 </div>
 
+                {paymentMode === 'BANK_TRANSFER' && (
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 uppercase mb-1 flex items-center gap-1">
+                      <Landmark className="w-3.5 h-3.5 text-purple-600" />
+                      <span>Paying Company Bank Account</span>
+                    </label>
+                    <select
+                      value={paymentBankName || companyBankAccounts[0] || 'Commercial Bank'}
+                      onChange={(e) => setPaymentBankName(e.target.value)}
+                      className="w-full p-2.5 rounded-xl border border-slate-200 text-sm bg-white font-bold text-slate-800"
+                    >
+                      {companyBankAccounts.map((bank) => (
+                        <option key={bank} value={bank}>
+                          {bank}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+
                 <div>
                   <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
-                    Reference / Cheque No
+                    Reference / Ref No
                   </label>
                   <input
                     type="text"
                     placeholder="Ref / Chq #"
                     value={paymentRef}
-                    onChange={(e) => setPaymentRef(e.target.value)}
+                    onChange={(e) => {
+                      setPaymentRef(e.target.value);
+                      if (!paymentChequeNo) setPaymentChequeNo(e.target.value);
+                    }}
                     className="w-full p-2.5 rounded-xl border border-slate-200 text-sm font-mono"
                   />
                 </div>
               </div>
+
+              {/* Cheque & PDC Details Expandable Section */}
+              {(paymentMode === 'CHEQUE' || paymentIsPdc) && (
+                <div className="bg-purple-50/80 border border-purple-200 rounded-2xl p-3.5 space-y-3">
+                  <div className="flex items-center justify-between pb-2 border-b border-purple-200/60">
+                    <div className="flex items-center gap-1.5 text-purple-900 font-bold text-xs uppercase tracking-wider">
+                      <Clock className="w-4 h-4 text-purple-600" />
+                      <span>Cheque & Post-Dated Cheque (PDC) Details</span>
+                    </div>
+                    <label className="flex items-center gap-1.5 text-xs font-semibold text-purple-900 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={paymentIsPdc}
+                        onChange={(e) => setPaymentIsPdc(e.target.checked)}
+                        className="rounded text-purple-600 focus:ring-purple-500"
+                      />
+                      <span>Register in PDC Management</span>
+                    </label>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div>
+                      <label className="block text-[11px] font-bold text-purple-900 uppercase mb-1">
+                        Cheque Number *
+                      </label>
+                      <input
+                        type="text"
+                        required={paymentMode === 'CHEQUE' || paymentIsPdc}
+                        placeholder="e.g. 002951"
+                        value={paymentChequeNo}
+                        onChange={(e) => {
+                          setPaymentChequeNo(e.target.value);
+                          if (!paymentRef) setPaymentRef(e.target.value);
+                        }}
+                        className="w-full p-2 rounded-xl border border-purple-300 text-xs font-mono bg-white font-bold text-purple-950"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] font-bold text-purple-900 uppercase mb-1">
+                        Cheque Maturity Date *
+                      </label>
+                      <input
+                        type="date"
+                        required={paymentMode === 'CHEQUE' || paymentIsPdc}
+                        value={paymentChequeDate}
+                        onChange={(e) => setPaymentChequeDate(e.target.value)}
+                        className="w-full p-2 rounded-xl border border-purple-300 text-xs bg-white font-mono font-bold text-purple-950"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] font-bold text-purple-900 uppercase mb-1 flex items-center gap-1">
+                        <Landmark className="w-3.5 h-3.5 text-purple-600" />
+                        <span>Paying Company Bank Account *</span>
+                      </label>
+                      <select
+                        value={paymentBankName || companyBankAccounts[0] || 'Commercial Bank'}
+                        onChange={(e) => setPaymentBankName(e.target.value)}
+                        className="w-full p-2 rounded-xl border border-purple-300 text-xs bg-white font-bold text-purple-950"
+                      >
+                        {companyBankAccounts.map((bank) => (
+                          <option key={bank} value={bank}>
+                            {bank}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                </div>
+              )}
 
               <div>
                 <label className="block text-xs font-bold text-slate-700 uppercase mb-1">

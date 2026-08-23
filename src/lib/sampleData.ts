@@ -41,6 +41,12 @@ export const INITIAL_SETTINGS: AppSettings = {
   allowNegativeStock: false,
   initialCashBalance: 0,
   invoiceNote: 'Thank you for your business!',
+  companyBankAccounts: [
+    'Commercial Bank',
+    'Sampath Bank',
+    'Hatton National Bank (HNB)',
+    'Bank of Ceylon (BOC)'
+  ],
   supabaseUrl: '',
   supabaseAnonKey: '',
   defaultPrintFormat: 'A4',

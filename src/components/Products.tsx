@@ -174,7 +174,7 @@ export const Products: React.FC<ProductsProps> = ({
     if (q) {
       const terms = q.split(/\s+/).filter(Boolean);
       matchesQuery = terms.every((t) =>
-        [prod.name, prod.code, prod.category].join(' ').toLowerCase().includes(t)
+        [prod.name, prod.code, prod.category, prod.barcode || ''].join(' ').toLowerCase().includes(t)
       );
     }
     const matchesCategory = categoryFilter === 'ALL' || prod.category === categoryFilter;

@@ -13,7 +13,10 @@ import {
   Building2,
   FileSpreadsheet,
   ChevronRight,
-  X
+  X,
+  Clock,
+  Scale,
+  PieChart
 } from 'lucide-react';
 import { PageType, AuthSession, PermissionModule } from '../types';
 import { checkPermission } from '../lib/permissions';
@@ -96,6 +99,30 @@ export const Sidebar: React.FC<SidebarProps> = ({
       label: 'Reports',
       icon: <BarChart3 className="w-5 h-5" />,
       requiredModule: 'reports'
+    },
+    {
+      id: 'pdc',
+      label: 'PDC Management',
+      icon: <Clock className="w-5 h-5 text-amber-300" />,
+      customCheck: checkPermission(perms, 'pdc', 'view')
+    },
+    {
+      id: 'trial_balance',
+      label: 'Trial Balance',
+      icon: <Scale className="w-5 h-5 text-blue-200" />,
+      customCheck: checkPermission(perms, 'trial_balance', 'view')
+    },
+    {
+      id: 'profit_loss',
+      label: 'Profit & Loss',
+      icon: <PieChart className="w-5 h-5 text-emerald-300" />,
+      customCheck: checkPermission(perms, 'profit_loss', 'view')
+    },
+    {
+      id: 'mis_reports',
+      label: 'MIS Reports',
+      icon: <FileSpreadsheet className="w-5 h-5 text-yellow-200" />,
+      customCheck: checkPermission(perms, 'mis_reports', 'view')
     },
     {
       id: 'users',

@@ -159,6 +159,34 @@ export const MODULE_PERMISSIONS: ModulePermissionDefinition[] = [
     module: 'audit_logs',
     label: 'Audit Security Logs',
     actions: [{ action: 'view', label: 'View System Audit Logs' }]
+  },
+  {
+    module: 'pdc',
+    label: 'Post-Dated Cheques (PDC)',
+    actions: [
+      { action: 'view', label: 'View PDC Register' },
+      { action: 'add', label: 'Record New PDC Cheque' },
+      { action: 'edit', label: 'Update PDC Status / Clear Cheque' },
+      { action: 'delete', label: 'Delete PDC Record' }
+    ]
+  },
+  {
+    module: 'ledger',
+    label: 'Ledger & Account Statements',
+    actions: [
+      { action: 'view', label: 'View Ledger Statements' },
+      { action: 'print', label: 'Print Statements' },
+      { action: 'export', label: 'Export Ledger' }
+    ]
+  },
+  {
+    module: 'accounting',
+    label: 'Trial Balance & Financial Statements',
+    actions: [
+      { action: 'view', label: 'View Trial Balance, P&L, & MIS' },
+      { action: 'print', label: 'Print Financial Statements' },
+      { action: 'export', label: 'Export Statements' }
+    ]
   }
 ];
 
@@ -273,6 +301,16 @@ export const SYSTEM_ROLES: Role[] = [
       'expenses:view',
       'expenses:add',
       'expenses:edit',
+      'pdc:view',
+      'pdc:add',
+      'pdc:edit',
+      'pdc:delete',
+      'ledger:view',
+      'ledger:print',
+      'ledger:export',
+      'accounting:view',
+      'accounting:print',
+      'accounting:export',
       'reports:view',
       'reports:print',
       'reports:export'
@@ -294,6 +332,9 @@ export const SYSTEM_ROLES: Role[] = [
       'customer_receipts:view',
       'supplier_payments:view',
       'expenses:view',
+      'pdc:view',
+      'ledger:view',
+      'accounting:view',
       'reports:view',
       'reports:print',
       'reports:export'
@@ -385,6 +426,37 @@ export function checkPermission(
       Boolean(effectivePermissions[`users:${action}` as PermissionKey]) ||
       Boolean(effectivePermissions[`roles:${action}` as PermissionKey]) ||
       Boolean(effectivePermissions[`audit_logs:${action}` as PermissionKey])
+    );
+  }
+
+  if (module === 'pdc') {
+    if (effectivePermissions[`pdc:${action}` as PermissionKey]) return true;
+    return (
+      Boolean(effectivePermissions[`customer_receipts:${action}` as PermissionKey]) ||
+      Boolean(effectivePermissions[`supplier_payments:${action}` as PermissionKey]) ||
+      Boolean(effectivePermissions[`reports:${action}` as PermissionKey]) ||
+      Boolean(effectivePermissions[`dashboard:${action}` as PermissionKey])
+    );
+  }
+
+  if (module === 'trial_balance' || module === 'profit_loss' || module === 'mis_reports') {
+    if (effectivePermissions[`accounting:${action}` as PermissionKey]) return true;
+    return Boolean(effectivePermissions[`reports:${action}` as PermissionKey]);
+  }
+
+  if (module === 'ledger') {
+    if (effectivePermissions[`ledger:${action}` as PermissionKey]) return true;
+    return (
+      Boolean(effectivePermissions[`reports:${action}` as PermissionKey]) ||
+      Boolean(effectivePermissions[`customer_receipts:${action}` as PermissionKey]) ||
+      Boolean(effectivePermissions[`supplier_payments:${action}` as PermissionKey])
+    );
+  }
+
+  if (module === 'item_history') {
+    return (
+      Boolean(effectivePermissions[`products:${action}` as PermissionKey]) ||
+      Boolean(effectivePermissions[`reports:${action}` as PermissionKey])
     );
   }
 

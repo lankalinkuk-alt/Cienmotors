@@ -339,7 +339,7 @@ export const Purchases: React.FC<PurchasesProps> = ({
     setIsModalOpen(true);
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
     if (purchaseType === 'CREDIT' && !selectedSupplierId) {
@@ -357,7 +357,7 @@ export const Purchases: React.FC<PurchasesProps> = ({
 
     try {
       if (editingPurchase && onUpdatePurchase) {
-        const updated = onUpdatePurchase(editingPurchase.id, {
+        const updated = await onUpdatePurchase(editingPurchase.id, {
           date: purchaseDate,
           supplierId: selectedSupplierId || undefined,
           supplierName: supplierNameToUse,
@@ -378,7 +378,7 @@ export const Purchases: React.FC<PurchasesProps> = ({
         setIsModalOpen(false);
         setEditingPurchase(null);
       } else {
-        const newPurchase = onCreatePurchase({
+        const newPurchase = await onCreatePurchase({
           date: purchaseDate,
           supplierId: selectedSupplierId || undefined,
           supplierName: supplierNameToUse,

@@ -479,6 +479,54 @@ EXCEPTION WHEN OTHERS THEN NULL;
 END $$;
 
 -- ------------------------------------------------------------
+-- 4.5. PDC & JOURNAL ENTRIES TABLES
+-- ------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS busy_ufo_pdcs (
+    id VARCHAR(50) PRIMARY KEY,
+    request_id VARCHAR(100) UNIQUE,
+    company_id VARCHAR(50) REFERENCES companies(id) ON DELETE CASCADE,
+    type VARCHAR(20) NOT NULL CHECK (type IN ('RECEIVED', 'ISSUED')),
+    party_id VARCHAR(50),
+    party_type VARCHAR(20) NOT NULL CHECK (party_type IN ('CUSTOMER', 'SUPPLIER')),
+    party_name VARCHAR(100) NOT NULL,
+    cheque_number VARCHAR(50) NOT NULL,
+    bank_name VARCHAR(100) NOT NULL,
+    cheque_date DATE NOT NULL,
+    amount NUMERIC(12, 2) NOT NULL,
+    status VARCHAR(20) NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING', 'DEPOSITED', 'CLEARED', 'BOUNCED', 'CANCELLED', 'RETURNED')),
+    reference_voucher_no VARCHAR(50),
+    notes TEXT,
+    cleared_at TIMESTAMP WITH TIME ZONE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS busy_ufo_journal_entries (
+    id VARCHAR(50) PRIMARY KEY,
+    request_id VARCHAR(100) UNIQUE,
+    company_id VARCHAR(50) REFERENCES companies(id) ON DELETE CASCADE,
+    voucher_no VARCHAR(50) NOT NULL,
+    voucher_type VARCHAR(30) NOT NULL,
+    voucher_date DATE NOT NULL,
+    narration TEXT,
+    debit_total NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+    credit_total NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS busy_ufo_journal_lines (
+    id VARCHAR(50) PRIMARY KEY,
+    entry_id VARCHAR(50) REFERENCES busy_ufo_journal_entries(id) ON DELETE CASCADE,
+    ledger_id VARCHAR(50),
+    ledger_name VARCHAR(100) NOT NULL,
+    account_group VARCHAR(100) NOT NULL,
+    debit NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+    credit NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+    particulars TEXT
+);
+
+
+-- ------------------------------------------------------------
 -- 5. INITIAL SAMPLE SEED DATA
 -- ------------------------------------------------------------
 
