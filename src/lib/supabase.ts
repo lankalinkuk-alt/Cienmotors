@@ -17,6 +17,22 @@ let cachedClient: SupabaseClient | null = null;
 let cachedUrl = '';
 let cachedKey = '';
 
+// Active in-flight request tracking to prevent concurrent double-submissions
+const _inFlightRequests = new Set<string>();
+
+/**
+ * Generates ONE cryptographically unique request ID for transaction idempotency & database-level uniqueness.
+ */
+export function generateUniqueRequestId(prefix: string = 'req'): string {
+  try {
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+      return `${prefix}_${crypto.randomUUID()}`;
+    }
+  } catch {}
+  const rand = Math.random().toString(36).substring(2, 10) + Math.random().toString(36).substring(2, 10);
+  return `${prefix}_${Date.now()}_${rand}`;
+}
+
 export function getActiveSupabaseCredentials(): { url: string; key: string } {
   let url = '';
   let key = '';
@@ -234,7 +250,74 @@ async function ensureCompanyExists(client: SupabaseClient, companyId?: string): 
 // SUPABASE REAL-TIME CLOUD SYNC ENGINE
 // ==========================================
 
+export type UserStatusCheckResult =
+  | { status: 'USERS_EXIST'; users: AppUser[]; count: number }
+  | { status: 'ZERO_USERS' }
+  | { status: 'CONNECTION_ERROR'; error: string };
+
 export const SupabaseSyncService = {
+  // --- USER AUTHENTICATION & STATUS (Supabase is Single Source of Truth) ---
+  async checkUsersStatus(): Promise<UserStatusCheckResult> {
+    const client = getSupabaseClient();
+    if (!client) {
+      return {
+        status: 'CONNECTION_ERROR',
+        error: 'Unable to connect to the server. Please check your internet connection and try again.'
+      };
+    }
+
+    try {
+      const { data, error } = await client
+        .from('app_users')
+        .select('*')
+        .order('username');
+
+      if (error) {
+        console.warn('Supabase checkUsersStatus error:', error);
+        return {
+          status: 'CONNECTION_ERROR',
+          error: error.message || 'Unable to connect to the server. Please check your internet connection and try again.'
+        };
+      }
+
+      if (!data || data.length === 0) {
+        return { status: 'ZERO_USERS' };
+      }
+
+      const users: AppUser[] = data.map((row: any) => ({
+        id: String(row.id),
+        username: row.username,
+        usernameNormalized: row.username_normalized || (row.username ? row.username.toLowerCase() : ''),
+        fullName: row.full_name || row.fullName || row.username,
+        passwordHash: row.password_hash || row.passwordHash || '',
+        salt: row.salt || '',
+        roleId: row.role_id || row.roleId || 'role-sales',
+        roleName: row.role_name || row.roleName || 'Sales User',
+        isActive: row.is_active !== undefined ? row.is_active : (row.isActive !== undefined ? row.isActive : true),
+        assignedCompanyIds: Array.isArray(row.assigned_company_ids)
+          ? row.assigned_company_ids
+          : (typeof row.assigned_company_ids === 'string' && row.assigned_company_ids ? JSON.parse(row.assigned_company_ids) : []),
+        permissionOverrides: typeof row.permission_overrides === 'object' && row.permission_overrides !== null
+          ? row.permission_overrides
+          : (typeof row.permission_overrides === 'string' && row.permission_overrides ? JSON.parse(row.permission_overrides) : {}),
+        lastLogin: row.last_login || row.lastLogin,
+        createdAt: row.created_at || row.createdAt || new Date().toISOString(),
+        updatedAt: row.updated_at || row.updatedAt || new Date().toISOString()
+      }));
+
+      return {
+        status: 'USERS_EXIST',
+        users,
+        count: users.length
+      };
+    } catch (e: any) {
+      console.error('Supabase checkUsersStatus exception:', e);
+      return {
+        status: 'CONNECTION_ERROR',
+        error: 'Unable to connect to the server. Please check your internet connection and try again.'
+      };
+    }
+  },
   // --- USERS ---
   async syncUser(user: AppUser): Promise<{ success: boolean; error?: string }> {
     const client = getSupabaseClient();
@@ -643,15 +726,22 @@ export const SupabaseSyncService = {
   },
 
   // --- SALES INVOICES ---
-  async syncSaleInvoice(sale: SaleInvoice): Promise<{ success: boolean; error?: string }> {
+  async syncSaleInvoice(sale: SaleInvoice): Promise<{ success: boolean; error?: string; isDuplicate?: boolean }> {
     const client = getSupabaseClient();
     if (!client) return { success: false, error: 'Supabase not configured' };
+
+    const reqId = sale.requestId || `req_sale_${sale.id}`;
+    if (_inFlightRequests.has(reqId)) {
+      return { success: false, error: 'A transaction with this Request ID is already in-flight.' };
+    }
+    _inFlightRequests.add(reqId);
 
     try {
       await ensureCompanyExists(client, sale.companyId || 'comp-1');
 
       const salePayload = {
         id: sale.id,
+        request_id: reqId,
         invoice_number: sale.invoiceNumber,
         invoice_date: sale.date,
         customer_id: sale.customerId || null,
@@ -673,6 +763,11 @@ export const SupabaseSyncService = {
         .upsert(salePayload, { onConflict: 'id' });
 
       if (saleError) {
+        // If unique constraint violation on request_id, verify if the transaction already exists
+        if (saleError.message?.includes('request_id') || saleError.code === '23505') {
+          console.info(`Request ID "${reqId}" already processed by database. Database guarantees uniqueness.`);
+          return { success: true, isDuplicate: true };
+        }
         console.warn('Supabase sale sync error:', saleError);
         return { success: false, error: saleError.message };
       }
@@ -699,6 +794,8 @@ export const SupabaseSyncService = {
     } catch (e: any) {
       console.warn('Supabase sale sync exception:', e);
       return { success: false, error: e?.message };
+    } finally {
+      _inFlightRequests.delete(reqId);
     }
   },
 
@@ -732,15 +829,22 @@ export const SupabaseSyncService = {
   },
 
   // --- PURCHASES ---
-  async syncPurchaseInvoice(purchase: PurchaseInvoice): Promise<{ success: boolean; error?: string }> {
+  async syncPurchaseInvoice(purchase: PurchaseInvoice): Promise<{ success: boolean; error?: string; isDuplicate?: boolean }> {
     const client = getSupabaseClient();
     if (!client) return { success: false, error: 'Supabase not configured' };
+
+    const reqId = purchase.requestId || `req_pur_${purchase.id}`;
+    if (_inFlightRequests.has(reqId)) {
+      return { success: false, error: 'A transaction with this Request ID is already in-flight.' };
+    }
+    _inFlightRequests.add(reqId);
 
     try {
       await ensureCompanyExists(client, purchase.companyId || 'comp-1');
 
       const purchasePayload = {
         id: purchase.id,
+        request_id: reqId,
         purchase_number: purchase.purchaseNumber,
         purchase_date: purchase.date,
         supplier_id: purchase.supplierId || null,
@@ -762,6 +866,10 @@ export const SupabaseSyncService = {
         .upsert(purchasePayload, { onConflict: 'id' });
 
       if (purError) {
+        if (purError.message?.includes('request_id') || purError.code === '23505') {
+          console.info(`Request ID "${reqId}" already processed by database. Database guarantees uniqueness.`);
+          return { success: true, isDuplicate: true };
+        }
         console.warn('Supabase purchase sync error:', purError);
         return { success: false, error: purError.message };
       }
@@ -787,6 +895,8 @@ export const SupabaseSyncService = {
     } catch (e: any) {
       console.warn('Supabase purchase sync exception:', e);
       return { success: false, error: e?.message };
+    } finally {
+      _inFlightRequests.delete(reqId);
     }
   },
 
@@ -820,13 +930,21 @@ export const SupabaseSyncService = {
   },
 
   // --- RECEIPTS, PAYMENTS & EXPENSES ---
-  async syncReceipt(receipt: CustomerReceipt): Promise<{ success: boolean; error?: string }> {
+  async syncReceipt(receipt: CustomerReceipt): Promise<{ success: boolean; error?: string; isDuplicate?: boolean }> {
     const client = getSupabaseClient();
     if (!client) return { success: false, error: 'Supabase not configured' };
+
+    const reqId = receipt.requestId || `req_rec_${receipt.id}`;
+    if (_inFlightRequests.has(reqId)) {
+      return { success: false, error: 'A transaction with this Request ID is already in-flight.' };
+    }
+    _inFlightRequests.add(reqId);
+
     try {
       await ensureCompanyExists(client, receipt.companyId || 'comp-1');
       const payload = {
         id: receipt.id,
+        request_id: reqId,
         receipt_number: receipt.receiptNumber,
         date: receipt.date,
         customer_id: receipt.customerId || null,
@@ -838,10 +956,17 @@ export const SupabaseSyncService = {
         company_id: receipt.companyId || 'comp-1'
       };
       const { error } = await client.from('busy_ufo_customer_receipts').upsert(payload, { onConflict: 'id' });
-      if (error) return { success: false, error: error.message };
+      if (error) {
+        if (error.message?.includes('request_id') || error.code === '23505') {
+          return { success: true, isDuplicate: true };
+        }
+        return { success: false, error: error.message };
+      }
       return { success: true };
     } catch (e: any) {
       return { success: false, error: e?.message };
+    } finally {
+      _inFlightRequests.delete(reqId);
     }
   },
 
@@ -861,13 +986,21 @@ export const SupabaseSyncService = {
     }
   },
 
-  async syncPayment(payment: SupplierPayment): Promise<{ success: boolean; error?: string }> {
+  async syncPayment(payment: SupplierPayment): Promise<{ success: boolean; error?: string; isDuplicate?: boolean }> {
     const client = getSupabaseClient();
     if (!client) return { success: false, error: 'Supabase not configured' };
+
+    const reqId = payment.requestId || `req_pay_${payment.id}`;
+    if (_inFlightRequests.has(reqId)) {
+      return { success: false, error: 'A transaction with this Request ID is already in-flight.' };
+    }
+    _inFlightRequests.add(reqId);
+
     try {
       await ensureCompanyExists(client, payment.companyId || 'comp-1');
       const payload = {
         id: payment.id,
+        request_id: reqId,
         payment_number: payment.paymentNumber,
         date: payment.date,
         supplier_id: payment.supplierId || null,
@@ -879,10 +1012,17 @@ export const SupabaseSyncService = {
         company_id: payment.companyId || 'comp-1'
       };
       const { error } = await client.from('busy_ufo_supplier_payments').upsert(payload, { onConflict: 'id' });
-      if (error) return { success: false, error: error.message };
+      if (error) {
+        if (error.message?.includes('request_id') || error.code === '23505') {
+          return { success: true, isDuplicate: true };
+        }
+        return { success: false, error: error.message };
+      }
       return { success: true };
     } catch (e: any) {
       return { success: false, error: e?.message };
+    } finally {
+      _inFlightRequests.delete(reqId);
     }
   },
 
@@ -902,13 +1042,21 @@ export const SupabaseSyncService = {
     }
   },
 
-  async syncExpense(expense: Expense): Promise<{ success: boolean; error?: string }> {
+  async syncExpense(expense: Expense): Promise<{ success: boolean; error?: string; isDuplicate?: boolean }> {
     const client = getSupabaseClient();
     if (!client) return { success: false, error: 'Supabase not configured' };
+
+    const reqId = expense.requestId || `req_exp_${expense.id}`;
+    if (_inFlightRequests.has(reqId)) {
+      return { success: false, error: 'A transaction with this Request ID is already in-flight.' };
+    }
+    _inFlightRequests.add(reqId);
+
     try {
       await ensureCompanyExists(client, expense.companyId || 'comp-1');
       const payload = {
         id: expense.id,
+        request_id: reqId,
         expense_number: expense.expenseNumber,
         date: expense.date,
         category: expense.category,
@@ -918,10 +1066,17 @@ export const SupabaseSyncService = {
         company_id: expense.companyId || 'comp-1'
       };
       const { error } = await client.from('busy_ufo_expenses').upsert(payload, { onConflict: 'id' });
-      if (error) return { success: false, error: error.message };
+      if (error) {
+        if (error.message?.includes('request_id') || error.code === '23505') {
+          return { success: true, isDuplicate: true };
+        }
+        return { success: false, error: error.message };
+      }
       return { success: true };
     } catch (e: any) {
       return { success: false, error: e?.message };
+    } finally {
+      _inFlightRequests.delete(reqId);
     }
   },
 
@@ -1089,6 +1244,7 @@ export const SupabaseSyncService = {
 
       return salesData.map((row: any) => ({
         id: row.id,
+        requestId: row.request_id || row.id,
         companyId: row.company_id || 'comp-1',
         invoiceNumber: row.invoice_number,
         date: row.invoice_date,
@@ -1150,6 +1306,7 @@ export const SupabaseSyncService = {
 
       return purData.map((row: any) => ({
         id: row.id,
+        requestId: row.request_id || row.id,
         companyId: row.company_id || 'comp-1',
         purchaseNumber: row.purchase_number,
         date: row.purchase_date,
@@ -1182,6 +1339,7 @@ export const SupabaseSyncService = {
       if (error || !data) return null;
       return data.map((row: any) => ({
         id: row.id,
+        requestId: row.request_id || row.id,
         companyId: row.company_id || 'comp-1',
         receiptNumber: row.receipt_number,
         date: row.date,
@@ -1209,6 +1367,7 @@ export const SupabaseSyncService = {
       if (error || !data) return null;
       return data.map((row: any) => ({
         id: row.id,
+        requestId: row.request_id || row.id,
         companyId: row.company_id || 'comp-1',
         paymentNumber: row.payment_number,
         date: row.date,
@@ -1236,6 +1395,7 @@ export const SupabaseSyncService = {
       if (error || !data) return null;
       return data.map((row: any) => ({
         id: row.id,
+        requestId: row.request_id || row.id,
         companyId: row.company_id || 'comp-1',
         expenseNumber: row.expense_number,
         date: row.date,

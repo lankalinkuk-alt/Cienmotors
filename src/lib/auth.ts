@@ -11,10 +11,9 @@ import {
 import { SYSTEM_ROLES, calculateEffectivePermissions, checkPermission } from './permissions';
 import { generateSalt, generateUUID, hashPassword, verifyPassword } from './crypto';
 import { StorageService } from './storage';
-import { SupabaseSyncService } from './supabase';
+import { SupabaseSyncService, UserStatusCheckResult } from './supabase';
 
 const AUTH_STORAGE_KEYS = {
-  USERS: 'busy_ufo_users',
   ROLES: 'busy_ufo_roles',
   SESSION: 'busy_ufo_session',
   AUDIT_LOGS: 'busy_ufo_audit_logs'
@@ -117,12 +116,7 @@ export const AuthService = {
 
   // --- USERS MANAGEMENT ---
   getUsers(): AppUser[] {
-    const memoryUsers = StorageService.getUsers();
-    if (memoryUsers && memoryUsers.length > 0) {
-      return memoryUsers;
-    }
-    const users = getStored<AppUser[]>(AUTH_STORAGE_KEYS.USERS, []);
-    return users.filter((u) => u && u.id);
+    return StorageService.getUsers();
   },
 
   getUserById(userId: string): AppUser | undefined {
@@ -133,21 +127,40 @@ export const AuthService = {
   getUserByUsername(username: string): AppUser | undefined {
     const clean = username.trim().toLowerCase();
     const users = this.getUsers();
-    return users.find((u) => u.usernameNormalized === clean);
+    return users.find((u) => (u.usernameNormalized && u.usernameNormalized === clean) || u.username.toLowerCase() === clean);
   },
 
+  /**
+   * Check account existence with Supabase as single source of truth.
+   * Never relies on localStorage.
+   */
+  async checkAccountStatus(): Promise<UserStatusCheckResult> {
+    const result = await SupabaseSyncService.checkUsersStatus();
+    if (result.status === 'USERS_EXIST') {
+      StorageService.setUsers(result.users);
+    }
+    return result;
+  },
+
+  /**
+   * Legacy helper retained for backwards compatibility with synchronous calls if any.
+   */
   isInitialAdminSetupRequired(): boolean {
     const users = this.getUsers();
     return users.length === 0;
   },
 
   /**
-   * Initializes the first administrator account safely on initial system setup.
+   * Initializes the first administrator account safely ONLY when Supabase genuinely has 0 users.
    */
   async setupFirstAdmin(password: string, fullName = 'System Administrator'): Promise<AuthSession> {
-    const users = this.getUsers();
-    if (users.length > 0) {
-      throw new Error('System already initialized. Please login with existing credentials.');
+    // Concurrency & Race Condition Guard: Query Supabase directly
+    const status = await SupabaseSyncService.checkUsersStatus();
+    if (status.status === 'USERS_EXIST') {
+      throw new Error('Administrator accounts already exist in the database. First-time setup is disabled. Please log in with existing credentials.');
+    }
+    if (status.status === 'CONNECTION_ERROR') {
+      throw new Error(`Unable to verify database status: ${status.error}`);
     }
 
     const salt = generateSalt();
@@ -169,7 +182,12 @@ export const AuthService = {
       lastLogin: now
     };
 
-    setStored(AUTH_STORAGE_KEYS.USERS, [adminUser]);
+    const syncRes = await SupabaseSyncService.syncUser(adminUser);
+    if (!syncRes.success) {
+      throw new Error(syncRes.error || 'Failed to save administrator to Supabase database.');
+    }
+
+    StorageService.setUsers([adminUser]);
 
     this.recordAuditLog(
       'USER_CREATED',
@@ -277,8 +295,11 @@ export const AuthService = {
 
     const users = this.getUsers();
     users.push(newUser);
-    setStored(AUTH_STORAGE_KEYS.USERS, users);
-    SupabaseSyncService.syncUser(newUser).catch(() => {});
+    StorageService.setUsers(users);
+    const syncRes = await SupabaseSyncService.syncUser(newUser);
+    if (!syncRes.success) {
+      console.warn('Sync user error:', syncRes.error);
+    }
 
     this.recordAuditLog(
       'USER_CREATED',
@@ -293,14 +314,14 @@ export const AuthService = {
   /**
    * Updates user details (Full name, Role, Active status).
    */
-  updateUser(
+  async updateUser(
     userId: string,
     updates: {
       fullName?: string;
       roleId?: string;
       isActive?: boolean;
     }
-  ): AppUser {
+  ): Promise<AppUser> {
     const users = this.getUsers();
     const idx = users.findIndex((u) => u.id === userId);
     if (idx === -1) {
@@ -351,8 +372,8 @@ export const AuthService = {
     };
 
     users[idx] = updatedUser;
-    setStored(AUTH_STORAGE_KEYS.USERS, users);
-    SupabaseSyncService.syncUser(updatedUser).catch(() => {});
+    StorageService.setUsers(users);
+    await SupabaseSyncService.syncUser(updatedUser);
 
     if (wasActive !== updatedUser.isActive) {
       this.recordAuditLog(
@@ -398,8 +419,8 @@ export const AuthService = {
       updatedAt: now
     };
 
-    setStored(AUTH_STORAGE_KEYS.USERS, users);
-    SupabaseSyncService.syncUser(users[idx]).catch(() => {});
+    StorageService.setUsers(users);
+    await SupabaseSyncService.syncUser(users[idx]);
 
     this.recordAuditLog(
       'PASSWORD_RESET',
@@ -440,8 +461,8 @@ export const AuthService = {
       updatedAt: now
     };
 
-    setStored(AUTH_STORAGE_KEYS.USERS, users);
-    SupabaseSyncService.syncUser(users[idx]).catch(() => {});
+    StorageService.setUsers(users);
+    await SupabaseSyncService.syncUser(users[idx]);
 
     this.recordAuditLog(
       'PASSWORD_CHANGED',
@@ -469,7 +490,7 @@ export const AuthService = {
     };
 
     users[idx] = updatedUser;
-    setStored(AUTH_STORAGE_KEYS.USERS, users);
+    StorageService.setUsers(users);
     SupabaseSyncService.syncUser(updatedUser).catch(() => {});
 
     this.recordAuditLog(
@@ -510,7 +531,7 @@ export const AuthService = {
     }
 
     const filtered = users.filter((u) => u.id !== userId);
-    setStored(AUTH_STORAGE_KEYS.USERS, filtered);
+    StorageService.setUsers(filtered);
     SupabaseSyncService.deleteUser(userId).catch(() => {});
 
     this.recordAuditLog(
@@ -581,6 +602,7 @@ export const AuthService = {
   /**
    * Validates username + password and issues session.
    * Case-insensitive matching on username.
+   * Supabase is the single source of truth for accounts.
    */
   async login(username: string, password: string): Promise<AuthSession> {
     const cleanUsername = username.trim();
@@ -589,7 +611,18 @@ export const AuthService = {
     }
 
     const normalized = cleanUsername.toLowerCase();
-    const user = this.getUserByUsername(normalized);
+    let user = this.getUserByUsername(normalized);
+
+    // If user not yet loaded into memory, fetch fresh user list from Supabase
+    if (!user) {
+      const remoteUsers = await SupabaseSyncService.fetchAllRemoteUsers();
+      if (remoteUsers && remoteUsers.length > 0) {
+        StorageService.setUsers(remoteUsers);
+        user = remoteUsers.find(
+          (u) => (u.usernameNormalized && u.usernameNormalized === normalized) || u.username.toLowerCase() === normalized
+        );
+      }
+    }
 
     if (!user) {
       this.recordAuditLog(
@@ -611,7 +644,7 @@ export const AuthService = {
       throw new Error('This user account is disabled. Please contact the administrator.');
     }
 
-    // Verify Password Hash
+    // Verify Password Hash (strict compatibility with Web Crypto SHA-256 + salt)
     const isValid = await verifyPassword(password, user.passwordHash, user.salt);
     if (!isValid) {
       this.recordAuditLog(
@@ -625,13 +658,24 @@ export const AuthService = {
 
     // Update Last Login timestamp
     const now = new Date().toISOString();
-    const users = this.getUsers();
-    const idx = users.findIndex((u) => u.id === user.id);
+    const allUsers = this.getUsers();
+    const idx = allUsers.findIndex((u) => u.id === user.id);
     if (idx !== -1) {
-      users[idx].lastLogin = now;
-      users[idx].updatedAt = now;
-      setStored(AUTH_STORAGE_KEYS.USERS, users);
-      SupabaseSyncService.syncUser(users[idx]).catch(() => {});
+      allUsers[idx].lastLogin = now;
+      allUsers[idx].updatedAt = now;
+      StorageService.setUsers(allUsers);
+    }
+    user.lastLogin = now;
+    user.updatedAt = now;
+    SupabaseSyncService.syncUser(user).catch(() => {});
+
+    // Ensure company context
+    let allCompanies = StorageService.getCompanies();
+    if (!allCompanies || allCompanies.length === 0) {
+      const remoteComps = await SupabaseSyncService.fetchAllRemoteCompanies();
+      if (remoteComps && remoteComps.length > 0) {
+        allCompanies = remoteComps;
+      }
     }
 
     const assignedCompanies = this.getUserAssignedCompanies(user);

@@ -173,7 +173,7 @@ export const UserManagement: React.FC<UserManagementProps> = ({
     if (!editingUser) return;
 
     try {
-      const updated = AuthService.updateUser(editingUser.id, {
+      const updated = await AuthService.updateUser(editingUser.id, {
         fullName: editingUser.fullName,
         roleId: editingUser.roleId,
         isActive: editingUser.isActive
@@ -197,7 +197,7 @@ export const UserManagement: React.FC<UserManagementProps> = ({
 
   const handleToggleUserActive = async (user: AppUser) => {
     try {
-      const updated = AuthService.updateUser(user.id, {
+      const updated = await AuthService.updateUser(user.id, {
         isActive: !user.isActive
       });
       await SupabaseSyncService.syncUser(updated);

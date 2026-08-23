@@ -142,6 +142,7 @@ export interface SaleItem {
 
 export interface SaleInvoice {
   id: string;
+  requestId?: string; // Unique Request ID for database transaction idempotency
   companyId?: string;
   invoiceNumber: string; // e.g., INV-2026-0001
   date: string; // YYYY-MM-DD
@@ -176,6 +177,7 @@ export interface PurchaseItem {
 
 export interface PurchaseInvoice {
   id: string;
+  requestId?: string; // Unique Request ID for database transaction idempotency
   companyId?: string;
   purchaseNumber: string; // e.g., PUR-2026-0001
   date: string;
@@ -217,6 +219,7 @@ export interface BillAllocation {
 
 export interface CustomerReceipt {
   id: string;
+  requestId?: string; // Unique Request ID for database transaction idempotency
   companyId?: string;
   receiptNumber: string; // REC-2026-0001
   date: string;
@@ -233,6 +236,7 @@ export interface CustomerReceipt {
 
 export interface SupplierPayment {
   id: string;
+  requestId?: string; // Unique Request ID for database transaction idempotency
   companyId?: string;
   paymentNumber: string; // PAY-2026-0001
   date: string;
@@ -249,6 +253,7 @@ export interface SupplierPayment {
 
 export interface Expense {
   id: string;
+  requestId?: string; // Unique Request ID for database transaction idempotency
   companyId?: string;
   expenseNumber: string; // EXP-2026-0001
   date: string;

@@ -29,7 +29,7 @@ import {
   INITIAL_PAYMENTS,
   INITIAL_EXPENSES
 } from './sampleData';
-import { SupabaseSyncService, getActiveSupabaseCredentials } from './supabase';
+import { SupabaseSyncService, getActiveSupabaseCredentials, generateUniqueRequestId } from './supabase';
 
 const STORAGE_KEYS = {
   SETTINGS: 'busy_ufo_settings'
@@ -870,9 +870,11 @@ export const StorageService = {
     const count = compSales.length + 1;
     const invNumber = `INV-${new Date().getFullYear()}-${String(count).padStart(4, '0')}`;
     const now = new Date().toISOString();
+    const requestId = invoiceData.requestId || generateUniqueRequestId('sale');
 
     const newSale: SaleInvoice = {
       ...invoiceData,
+      requestId,
       companyId: targetCompId,
       id: invoiceData.id || `sale-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
       invoiceNumber: invNumber,
@@ -1093,9 +1095,11 @@ export const StorageService = {
     const count = compPurchases.length + 1;
     const purNumber = `PUR-${new Date().getFullYear()}-${String(count).padStart(4, '0')}`;
     const now = new Date().toISOString();
+    const requestId = purchaseData.requestId || generateUniqueRequestId('pur');
 
     const newPurchase: PurchaseInvoice = {
       ...purchaseData,
+      requestId,
       companyId: targetCompId,
       id: purchaseData.id || `pur-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
       purchaseNumber: purNumber,
@@ -1314,9 +1318,11 @@ export const StorageService = {
     const count = compReceipts.length + 1;
     const recNumber = `REC-${new Date().getFullYear()}-${String(count).padStart(4, '0')}`;
     const now = new Date().toISOString();
+    const requestId = receiptData.requestId || generateUniqueRequestId('rec');
 
     const newReceipt: CustomerReceipt = {
       ...receiptData,
+      requestId,
       companyId: targetCompId,
       id: receiptData.id || `rec-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
       receiptNumber: recNumber,
@@ -1449,9 +1455,11 @@ export const StorageService = {
     const count = compPayments.length + 1;
     const payNumber = `PAY-${new Date().getFullYear()}-${String(count).padStart(4, '0')}`;
     const now = new Date().toISOString();
+    const requestId = paymentData.requestId || generateUniqueRequestId('pay');
 
     const newPayment: SupplierPayment = {
       ...paymentData,
+      requestId,
       companyId: targetCompId,
       id: paymentData.id || `pay-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
       paymentNumber: payNumber,
@@ -1584,9 +1592,11 @@ export const StorageService = {
     const count = compExpenses.length + 1;
     const expNumber = `EXP-${new Date().getFullYear()}-${String(count).padStart(4, '0')}`;
     const now = new Date().toISOString();
+    const requestId = expenseData.requestId || generateUniqueRequestId('exp');
 
     const newExpense: Expense = {
       ...expenseData,
+      requestId,
       companyId: targetCompId,
       id: expenseData.id || `exp-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
       expenseNumber: expNumber,

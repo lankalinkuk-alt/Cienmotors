@@ -311,8 +311,18 @@ ALTER TABLE busy_ufo_products ADD COLUMN IF NOT EXISTS import_batch_id VARCHAR(5
 -- ------------------------------------------------------------
 -- 4. INVOICES & TRANSACTIONS TABLES
 -- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS busy_ufo_idempotency_keys (
+    request_id VARCHAR(100) PRIMARY KEY,
+    transaction_type VARCHAR(50) NOT NULL,
+    entity_id VARCHAR(100) NOT NULL,
+    status VARCHAR(20) NOT NULL DEFAULT 'COMMITTED',
+    response_payload JSONB,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS busy_ufo_sales (
     id VARCHAR(50) PRIMARY KEY,
+    request_id VARCHAR(100) UNIQUE,
     invoice_number VARCHAR(50) NOT NULL,
     invoice_date DATE NOT NULL,
     customer_id VARCHAR(50) REFERENCES busy_ufo_customers(id) ON DELETE SET NULL,
@@ -331,6 +341,15 @@ CREATE TABLE IF NOT EXISTS busy_ufo_sales (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
+ALTER TABLE busy_ufo_sales ADD COLUMN IF NOT EXISTS request_id VARCHAR(100);
+DO $$ 
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'busy_ufo_sales_request_id_key') THEN
+        ALTER TABLE busy_ufo_sales ADD CONSTRAINT busy_ufo_sales_request_id_key UNIQUE (request_id);
+    END IF;
+EXCEPTION WHEN OTHERS THEN NULL;
+END $$;
+
 CREATE TABLE IF NOT EXISTS busy_ufo_sale_items (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     invoice_id VARCHAR(50) NOT NULL REFERENCES busy_ufo_sales(id) ON DELETE CASCADE,
@@ -346,6 +365,7 @@ CREATE TABLE IF NOT EXISTS busy_ufo_sale_items (
 
 CREATE TABLE IF NOT EXISTS busy_ufo_purchases (
     id VARCHAR(50) PRIMARY KEY,
+    request_id VARCHAR(100) UNIQUE,
     purchase_number VARCHAR(50) NOT NULL,
     purchase_date DATE NOT NULL,
     supplier_id VARCHAR(50) REFERENCES busy_ufo_suppliers(id) ON DELETE SET NULL,
@@ -364,6 +384,15 @@ CREATE TABLE IF NOT EXISTS busy_ufo_purchases (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
+ALTER TABLE busy_ufo_purchases ADD COLUMN IF NOT EXISTS request_id VARCHAR(100);
+DO $$ 
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'busy_ufo_purchases_request_id_key') THEN
+        ALTER TABLE busy_ufo_purchases ADD CONSTRAINT busy_ufo_purchases_request_id_key UNIQUE (request_id);
+    END IF;
+EXCEPTION WHEN OTHERS THEN NULL;
+END $$;
+
 CREATE TABLE IF NOT EXISTS busy_ufo_purchase_items (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     purchase_id VARCHAR(50) NOT NULL REFERENCES busy_ufo_purchases(id) ON DELETE CASCADE,
@@ -379,6 +408,7 @@ CREATE TABLE IF NOT EXISTS busy_ufo_purchase_items (
 
 CREATE TABLE IF NOT EXISTS busy_ufo_customer_receipts (
     id VARCHAR(50) PRIMARY KEY,
+    request_id VARCHAR(100) UNIQUE,
     receipt_number VARCHAR(50) NOT NULL,
     date DATE NOT NULL,
     customer_id VARCHAR(50) REFERENCES busy_ufo_customers(id) ON DELETE SET NULL,
@@ -392,8 +422,18 @@ CREATE TABLE IF NOT EXISTS busy_ufo_customer_receipts (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
+ALTER TABLE busy_ufo_customer_receipts ADD COLUMN IF NOT EXISTS request_id VARCHAR(100);
+DO $$ 
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'busy_ufo_customer_receipts_request_id_key') THEN
+        ALTER TABLE busy_ufo_customer_receipts ADD CONSTRAINT busy_ufo_customer_receipts_request_id_key UNIQUE (request_id);
+    END IF;
+EXCEPTION WHEN OTHERS THEN NULL;
+END $$;
+
 CREATE TABLE IF NOT EXISTS busy_ufo_supplier_payments (
     id VARCHAR(50) PRIMARY KEY,
+    request_id VARCHAR(100) UNIQUE,
     payment_number VARCHAR(50) NOT NULL,
     date DATE NOT NULL,
     supplier_id VARCHAR(50) REFERENCES busy_ufo_suppliers(id) ON DELETE SET NULL,
@@ -407,8 +447,18 @@ CREATE TABLE IF NOT EXISTS busy_ufo_supplier_payments (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
+ALTER TABLE busy_ufo_supplier_payments ADD COLUMN IF NOT EXISTS request_id VARCHAR(100);
+DO $$ 
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'busy_ufo_supplier_payments_request_id_key') THEN
+        ALTER TABLE busy_ufo_supplier_payments ADD CONSTRAINT busy_ufo_supplier_payments_request_id_key UNIQUE (request_id);
+    END IF;
+EXCEPTION WHEN OTHERS THEN NULL;
+END $$;
+
 CREATE TABLE IF NOT EXISTS busy_ufo_expenses (
     id VARCHAR(50) PRIMARY KEY,
+    request_id VARCHAR(100) UNIQUE,
     expense_number VARCHAR(50) NOT NULL,
     date DATE NOT NULL,
     category VARCHAR(100) NOT NULL,
@@ -418,6 +468,15 @@ CREATE TABLE IF NOT EXISTS busy_ufo_expenses (
     notes TEXT,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
+
+ALTER TABLE busy_ufo_expenses ADD COLUMN IF NOT EXISTS request_id VARCHAR(100);
+DO $$ 
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'busy_ufo_expenses_request_id_key') THEN
+        ALTER TABLE busy_ufo_expenses ADD CONSTRAINT busy_ufo_expenses_request_id_key UNIQUE (request_id);
+    END IF;
+EXCEPTION WHEN OTHERS THEN NULL;
+END $$;
 
 -- ------------------------------------------------------------
 -- 5. INITIAL SAMPLE SEED DATA
@@ -508,6 +567,7 @@ ALTER TABLE busy_ufo_purchase_items DISABLE ROW LEVEL SECURITY;
 ALTER TABLE busy_ufo_customer_receipts DISABLE ROW LEVEL SECURITY;
 ALTER TABLE busy_ufo_supplier_payments DISABLE ROW LEVEL SECURITY;
 ALTER TABLE busy_ufo_expenses DISABLE ROW LEVEL SECURITY;
+ALTER TABLE busy_ufo_idempotency_keys DISABLE ROW LEVEL SECURITY;
 ALTER TABLE app_users DISABLE ROW LEVEL SECURITY;
 ALTER TABLE roles DISABLE ROW LEVEL SECURITY;
 ALTER TABLE permissions DISABLE ROW LEVEL SECURITY;
@@ -518,6 +578,10 @@ ALTER TABLE audit_logs DISABLE ROW LEVEL SECURITY;
 
 DO $$ 
 BEGIN
+    -- Idempotency Keys
+    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'busy_ufo_idempotency_keys' AND policyname = 'Allow all on busy_ufo_idempotency_keys') THEN
+        CREATE POLICY "Allow all on busy_ufo_idempotency_keys" ON busy_ufo_idempotency_keys FOR ALL USING (true) WITH CHECK (true);
+    END IF;
     -- Companies
     IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'companies' AND policyname = 'Allow all on companies') THEN
         CREATE POLICY "Allow all on companies" ON companies FOR ALL USING (true) WITH CHECK (true);
