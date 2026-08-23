@@ -29,7 +29,7 @@ import {
   INITIAL_EXPENSES,
   INITIAL_COMPANIES
 } from './sampleData';
-import { SupabaseSyncService } from './supabase';
+import { SupabaseSyncService, getActiveSupabaseCredentials } from './supabase';
 
 const STORAGE_KEYS = {
   COMPANIES: 'busy_ufo_companies',
@@ -91,19 +91,6 @@ function removePendingSyncId(type: string, id: string): void {
     setItem(STORAGE_KEYS.PENDING_SYNC, raw);
   }
 }
-
-// One-time purge of legacy demo records if detected
-function purgeLegacyDemoData(): void {
-  try {
-    const rawComp = localStorage.getItem(STORAGE_KEYS.COMPANIES);
-    if (rawComp && (rawComp.includes('comp-abc-traders') || rawComp.includes('ABC Traders'))) {
-      Object.values(STORAGE_KEYS).forEach((k) => localStorage.removeItem(k));
-    }
-  } catch {
-    // Ignore storage access errors in restricted iframe sandbox
-  }
-}
-purgeLegacyDemoData();
 
 function getItem<T>(key: string, defaultValue: T): T {
   try {
@@ -249,6 +236,127 @@ export const StorageService = {
       }).catch(() => {});
     }
   },
+
+  async saveCompanyAsync(compData: Partial<Company>): Promise<{
+    success: boolean;
+    data?: Company;
+    isCloudConfirmed?: boolean;
+    isOfflineCached?: boolean;
+    isLocalOnly?: boolean;
+    message?: string;
+    error?: string;
+  }> {
+    const creds = getActiveSupabaseCredentials();
+    const isCloud = Boolean(creds.url && creds.key);
+
+    const companies = this.getCompanies();
+    const now = new Date().toISOString();
+
+    let companyToSave: Company;
+    if (compData.id) {
+      const idx = companies.findIndex((c) => c.id === compData.id);
+      if (idx !== -1) {
+        companyToSave = {
+          ...companies[idx],
+          ...compData,
+          updatedAt: now
+        };
+      } else {
+        companyToSave = {
+          id: compData.id,
+          companyName: compData.companyName?.trim() || 'New Company',
+          shortName: compData.shortName?.trim().toUpperCase() || 'NEW',
+          address: compData.address?.trim() || '',
+          city: compData.city?.trim() || 'Colombo',
+          district: compData.district?.trim() || 'Colombo',
+          country: compData.country?.trim() || 'Sri Lanka',
+          telephone: compData.telephone?.trim() || '',
+          mobile: compData.mobile?.trim() || '',
+          companyEmail: compData.companyEmail?.trim() || '',
+          taxRegistrationNo: compData.taxRegistrationNo?.trim() || '',
+          currency: compData.currency?.trim() || 'Rs.',
+          financialYearStart: compData.financialYearStart || '2026-01-01',
+          financialYearEnd: compData.financialYearEnd || '2026-12-31',
+          invoicePrefix: compData.invoicePrefix?.trim() || 'INV',
+          invoiceNumber: compData.invoiceNumber || 1001,
+          isActive: compData.isActive !== undefined ? compData.isActive : true,
+          isVatEnabled: compData.isVatEnabled !== undefined ? compData.isVatEnabled : true,
+          vatNumber: compData.vatNumber?.trim() || compData.taxRegistrationNo?.trim() || '',
+          defaultVatRate: compData.defaultVatRate !== undefined ? compData.defaultVatRate : 18,
+          vatType: compData.vatType || 'EXCLUSIVE',
+          isItemDiscountEnabled: compData.isItemDiscountEnabled !== undefined ? compData.isItemDiscountEnabled : true,
+          defaultDiscountType: compData.defaultDiscountType || 'PERCENT',
+          createdAt: now,
+          updatedAt: now
+        };
+      }
+    } else {
+      companyToSave = {
+        id: `comp-${Date.now()}`,
+        companyName: compData.companyName?.trim() || 'New Company',
+        shortName: compData.shortName?.trim().toUpperCase() || 'NEW',
+        address: compData.address?.trim() || '',
+        city: compData.city?.trim() || 'Colombo',
+        district: compData.district?.trim() || 'Colombo',
+        country: compData.country?.trim() || 'Sri Lanka',
+        telephone: compData.telephone?.trim() || '',
+        mobile: compData.mobile?.trim() || '',
+        companyEmail: compData.companyEmail?.trim() || '',
+        taxRegistrationNo: compData.taxRegistrationNo?.trim() || '',
+        currency: compData.currency?.trim() || 'Rs.',
+        financialYearStart: compData.financialYearStart || '2026-01-01',
+        financialYearEnd: compData.financialYearEnd || '2026-12-31',
+        invoicePrefix: compData.invoicePrefix?.trim() || 'INV',
+        invoiceNumber: compData.invoiceNumber || 1001,
+        isActive: compData.isActive !== undefined ? compData.isActive : true,
+        isVatEnabled: compData.isVatEnabled !== undefined ? compData.isVatEnabled : true,
+        vatNumber: compData.vatNumber?.trim() || compData.taxRegistrationNo?.trim() || '',
+        defaultVatRate: compData.defaultVatRate !== undefined ? compData.defaultVatRate : 18,
+        vatType: compData.vatType || 'EXCLUSIVE',
+        isItemDiscountEnabled: compData.isItemDiscountEnabled !== undefined ? compData.isItemDiscountEnabled : true,
+        defaultDiscountType: compData.defaultDiscountType || 'PERCENT',
+        createdAt: now,
+        updatedAt: now
+      };
+    }
+
+    if (isCloud) {
+      const syncRes = await SupabaseSyncService.syncCompany(companyToSave);
+      if (syncRes.success) {
+        const res = this.saveCompany(compData);
+        removePendingSyncId('companies', companyToSave.id);
+        return {
+          success: true,
+          data: res,
+          isCloudConfirmed: true,
+          message: `Company "${companyToSave.companyName}" saved and verified in database.`
+        };
+      } else {
+        const isOffline = typeof navigator !== 'undefined' && !navigator.onLine;
+        if (isOffline) {
+          const res = this.saveCompany(compData);
+          return {
+            success: true,
+            data: res,
+            isOfflineCached: true,
+            message: `Company "${companyToSave.companyName}" saved locally (offline mode). Queued for sync.`
+          };
+        }
+        return {
+          success: false,
+          error: syncRes.error || 'Failed to save company to database.'
+        };
+      }
+    } else {
+      const res = this.saveCompany(compData);
+      return {
+        success: true,
+        data: res,
+        isLocalOnly: true,
+        message: `Company "${res.companyName}" saved.`
+      };
+    }
+  },
   // --- SETTINGS ---
   getSettings(): AppSettings {
     return getItem<AppSettings>(STORAGE_KEYS.SETTINGS, INITIAL_SETTINGS);
@@ -332,6 +440,143 @@ export const StorageService = {
     SupabaseSyncService.deleteCustomer(id).catch(() => {});
   },
 
+  async saveCustomerAsync(
+    customer: Partial<Customer>,
+    companyId?: string
+  ): Promise<{
+    success: boolean;
+    data?: Customer;
+    isCloudConfirmed?: boolean;
+    isOfflineCached?: boolean;
+    isLocalOnly?: boolean;
+    message?: string;
+    error?: string;
+  }> {
+    const targetCompId = companyId || customer.companyId || DEFAULT_COMPANY_ID;
+    if (!customer.name?.trim()) {
+      return { success: false, error: 'Customer Name is required.' };
+    }
+
+    const all = getItem<Customer[]>(STORAGE_KEYS.CUSTOMERS, INITIAL_CUSTOMERS);
+    const now = new Date().toISOString();
+    let targetCustomer: Customer;
+
+    if (customer.id) {
+      const existing = all.find((c) => c.id === customer.id);
+      targetCustomer = {
+        ...(existing || {}),
+        ...customer,
+        id: customer.id,
+        name: customer.name.trim(),
+        companyId: targetCompId,
+        updatedAt: now
+      } as Customer;
+    } else {
+      const compCustomers = all.filter((c) => (c.companyId || DEFAULT_COMPANY_ID) === targetCompId);
+      const codeCount = compCustomers.length + 1;
+      const autoCode = `CUST-${String(codeCount).padStart(3, '0')}`;
+      targetCustomer = {
+        id: `cust-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+        companyId: targetCompId,
+        code: customer.code?.trim() || autoCode,
+        name: customer.name.trim(),
+        companyName: customer.companyName?.trim() || customer.name.trim(),
+        phone: customer.phone?.trim() || customer.mobile?.trim() || '',
+        mobile: customer.mobile?.trim() || customer.phone?.trim() || '',
+        email: customer.email?.trim() || '',
+        address: customer.address?.trim() || '',
+        city: customer.city?.trim() || 'Colombo',
+        accountGroup: customer.accountGroup?.trim() || 'Sundry Debtors',
+        taxNumber: customer.taxNumber?.trim() || '',
+        openingBalance: Number(customer.openingBalance || 0),
+        openingBalanceType: customer.openingBalanceType || 'Dr',
+        outstandingBalance: Number(
+          customer.outstandingBalance !== undefined ? customer.outstandingBalance : (customer.openingBalance || 0)
+        ),
+        createdAt: now,
+        updatedAt: now
+      };
+    }
+
+    const creds = getActiveSupabaseCredentials();
+    const isCloud = Boolean(creds.url && creds.key);
+
+    if (isCloud) {
+      const syncRes = await SupabaseSyncService.syncCustomer(targetCustomer);
+      if (syncRes.success) {
+        const currentList = getItem<Customer[]>(STORAGE_KEYS.CUSTOMERS, INITIAL_CUSTOMERS);
+        const idx = currentList.findIndex((c) => c.id === targetCustomer.id);
+        if (idx !== -1) {
+          currentList[idx] = targetCustomer;
+        } else {
+          currentList.unshift(targetCustomer);
+        }
+        setItem(STORAGE_KEYS.CUSTOMERS, currentList);
+        removePendingSyncId('customers', targetCustomer.id);
+        return {
+          success: true,
+          data: targetCustomer,
+          isCloudConfirmed: true,
+          message: `Customer "${targetCustomer.name}" saved and verified in database.`
+        };
+      } else {
+        const isOffline = typeof navigator !== 'undefined' && !navigator.onLine;
+        if (isOffline) {
+          const currentList = getItem<Customer[]>(STORAGE_KEYS.CUSTOMERS, INITIAL_CUSTOMERS);
+          const idx = currentList.findIndex((c) => c.id === targetCustomer.id);
+          if (idx !== -1) {
+            currentList[idx] = targetCustomer;
+          } else {
+            currentList.unshift(targetCustomer);
+          }
+          setItem(STORAGE_KEYS.CUSTOMERS, currentList);
+          addPendingSyncId('customers', targetCustomer.id);
+          return {
+            success: true,
+            data: targetCustomer,
+            isOfflineCached: true,
+            message: `Saved locally (offline mode). Record queued for cloud sync.`
+          };
+        }
+        return {
+          success: false,
+          error: syncRes.error || 'Failed to save customer to cloud database.'
+        };
+      }
+    } else {
+      const saved = this.saveCustomer(targetCustomer, targetCompId);
+      return {
+        success: true,
+        data: saved,
+        isLocalOnly: true,
+        message: `Customer "${saved.name}" saved to local storage.`
+      };
+    }
+  },
+
+  async deleteCustomerAsync(id: string): Promise<{ success: boolean; message?: string; error?: string }> {
+    const creds = getActiveSupabaseCredentials();
+    const isCloud = Boolean(creds.url && creds.key);
+
+    if (isCloud) {
+      const res = await SupabaseSyncService.deleteCustomer(id);
+      if (res.success) {
+        this.deleteCustomer(id);
+        return { success: true, message: 'Customer deleted from database.' };
+      } else {
+        const isOffline = typeof navigator !== 'undefined' && !navigator.onLine;
+        if (isOffline) {
+          this.deleteCustomer(id);
+          return { success: true, message: 'Customer removed locally (offline).' };
+        }
+        return { success: false, error: res.error || 'Failed to delete customer from database.' };
+      }
+    } else {
+      this.deleteCustomer(id);
+      return { success: true, message: 'Customer removed.' };
+    }
+  },
+
   // --- SUPPLIERS ---
   getSuppliers(companyId?: string): Supplier[] {
     const raw = getItem<Supplier[]>(STORAGE_KEYS.SUPPLIERS, INITIAL_SUPPLIERS);
@@ -402,6 +647,143 @@ export const StorageService = {
     const all = getItem<Supplier[]>(STORAGE_KEYS.SUPPLIERS, INITIAL_SUPPLIERS).filter((s) => s.id !== id);
     setItem(STORAGE_KEYS.SUPPLIERS, all);
     SupabaseSyncService.deleteSupplier(id).catch(() => {});
+  },
+
+  async saveSupplierAsync(
+    supplier: Partial<Supplier>,
+    companyId?: string
+  ): Promise<{
+    success: boolean;
+    data?: Supplier;
+    isCloudConfirmed?: boolean;
+    isOfflineCached?: boolean;
+    isLocalOnly?: boolean;
+    message?: string;
+    error?: string;
+  }> {
+    const targetCompId = companyId || supplier.companyId || DEFAULT_COMPANY_ID;
+    if (!supplier.name?.trim()) {
+      return { success: false, error: 'Supplier Name is required.' };
+    }
+
+    const all = getItem<Supplier[]>(STORAGE_KEYS.SUPPLIERS, INITIAL_SUPPLIERS);
+    const now = new Date().toISOString();
+    let targetSupplier: Supplier;
+
+    if (supplier.id) {
+      const existing = all.find((s) => s.id === supplier.id);
+      targetSupplier = {
+        ...(existing || {}),
+        ...supplier,
+        id: supplier.id,
+        name: supplier.name.trim(),
+        companyId: targetCompId,
+        updatedAt: now
+      } as Supplier;
+    } else {
+      const compSuppliers = all.filter((s) => (s.companyId || DEFAULT_COMPANY_ID) === targetCompId);
+      const codeCount = compSuppliers.length + 1;
+      const autoCode = `SUPP-${String(codeCount).padStart(3, '0')}`;
+      targetSupplier = {
+        id: `supp-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+        companyId: targetCompId,
+        code: supplier.code?.trim() || autoCode,
+        name: supplier.name.trim(),
+        companyName: supplier.companyName?.trim() || supplier.name.trim(),
+        phone: supplier.phone?.trim() || supplier.mobile?.trim() || '',
+        mobile: supplier.mobile?.trim() || supplier.phone?.trim() || '',
+        email: supplier.email?.trim() || '',
+        address: supplier.address?.trim() || '',
+        city: supplier.city?.trim() || 'Colombo',
+        accountGroup: supplier.accountGroup?.trim() || 'Sundry Creditors',
+        taxNumber: supplier.taxNumber?.trim() || '',
+        openingBalance: Number(supplier.openingBalance || 0),
+        openingBalanceType: supplier.openingBalanceType || 'Cr',
+        payableBalance: Number(
+          supplier.payableBalance !== undefined ? supplier.payableBalance : (supplier.openingBalance || 0)
+        ),
+        createdAt: now,
+        updatedAt: now
+      };
+    }
+
+    const creds = getActiveSupabaseCredentials();
+    const isCloud = Boolean(creds.url && creds.key);
+
+    if (isCloud) {
+      const syncRes = await SupabaseSyncService.syncSupplier(targetSupplier);
+      if (syncRes.success) {
+        const currentList = getItem<Supplier[]>(STORAGE_KEYS.SUPPLIERS, INITIAL_SUPPLIERS);
+        const idx = currentList.findIndex((s) => s.id === targetSupplier.id);
+        if (idx !== -1) {
+          currentList[idx] = targetSupplier;
+        } else {
+          currentList.unshift(targetSupplier);
+        }
+        setItem(STORAGE_KEYS.SUPPLIERS, currentList);
+        removePendingSyncId('suppliers', targetSupplier.id);
+        return {
+          success: true,
+          data: targetSupplier,
+          isCloudConfirmed: true,
+          message: `Supplier "${targetSupplier.name}" saved and verified in database.`
+        };
+      } else {
+        const isOffline = typeof navigator !== 'undefined' && !navigator.onLine;
+        if (isOffline) {
+          const currentList = getItem<Supplier[]>(STORAGE_KEYS.SUPPLIERS, INITIAL_SUPPLIERS);
+          const idx = currentList.findIndex((s) => s.id === targetSupplier.id);
+          if (idx !== -1) {
+            currentList[idx] = targetSupplier;
+          } else {
+            currentList.unshift(targetSupplier);
+          }
+          setItem(STORAGE_KEYS.SUPPLIERS, currentList);
+          addPendingSyncId('suppliers', targetSupplier.id);
+          return {
+            success: true,
+            data: targetSupplier,
+            isOfflineCached: true,
+            message: `Saved locally (offline mode). Queued for sync.`
+          };
+        }
+        return {
+          success: false,
+          error: syncRes.error || 'Failed to save supplier to cloud database.'
+        };
+      }
+    } else {
+      const saved = this.saveSupplier(targetSupplier, targetCompId);
+      return {
+        success: true,
+        data: saved,
+        isLocalOnly: true,
+        message: `Supplier "${saved.name}" saved to local storage.`
+      };
+    }
+  },
+
+  async deleteSupplierAsync(id: string): Promise<{ success: boolean; message?: string; error?: string }> {
+    const creds = getActiveSupabaseCredentials();
+    const isCloud = Boolean(creds.url && creds.key);
+
+    if (isCloud) {
+      const res = await SupabaseSyncService.deleteSupplier(id);
+      if (res.success) {
+        this.deleteSupplier(id);
+        return { success: true, message: 'Supplier deleted from database.' };
+      } else {
+        const isOffline = typeof navigator !== 'undefined' && !navigator.onLine;
+        if (isOffline) {
+          this.deleteSupplier(id);
+          return { success: true, message: 'Supplier removed locally (offline).' };
+        }
+        return { success: false, error: res.error || 'Failed to delete supplier from database.' };
+      }
+    } else {
+      this.deleteSupplier(id);
+      return { success: true, message: 'Supplier removed.' };
+    }
   },
 
   // --- PRODUCTS ---
@@ -502,6 +884,150 @@ export const StorageService = {
     const all = getItem<Product[]>(STORAGE_KEYS.PRODUCTS, INITIAL_PRODUCTS).filter((p) => p.id !== id);
     setItem(STORAGE_KEYS.PRODUCTS, all);
     SupabaseSyncService.deleteProduct(id).catch(() => {});
+  },
+
+  async saveProductAsync(
+    product: Partial<Product>,
+    companyId?: string
+  ): Promise<{
+    success: boolean;
+    data?: Product;
+    isCloudConfirmed?: boolean;
+    isOfflineCached?: boolean;
+    isLocalOnly?: boolean;
+    message?: string;
+    error?: string;
+  }> {
+    const targetCompId = companyId || product.companyId || DEFAULT_COMPANY_ID;
+    if (!product.name?.trim()) {
+      return { success: false, error: 'Product Name is required.' };
+    }
+
+    const all = getItem<Product[]>(STORAGE_KEYS.PRODUCTS, INITIAL_PRODUCTS);
+    const now = new Date().toISOString();
+    let targetProduct: Product;
+
+    if (product.id) {
+      const existing = all.find((p) => p.id === product.id);
+      targetProduct = {
+        ...(existing || {}),
+        ...product,
+        id: product.id,
+        name: product.name.trim(),
+        code: product.code?.trim().toUpperCase() || existing?.code || 'PROD-001',
+        companyId: targetCompId,
+        updatedAt: now
+      } as Product;
+    } else {
+      const compProducts = all.filter((p) => (p.companyId || DEFAULT_COMPANY_ID) === targetCompId);
+      const codeCount = compProducts.length + 1;
+      const autoCode = `PROD-${String(codeCount).padStart(3, '0')}`;
+      targetProduct = {
+        id: `prod-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+        companyId: targetCompId,
+        code: product.code?.trim().toUpperCase() || autoCode,
+        name: product.name.trim(),
+        category: product.category?.trim() || 'General',
+        unit: product.unit || 'Nos',
+        primaryUnit: product.primaryUnit || product.unit || 'Nos',
+        secondaryUnit: product.secondaryUnit,
+        conversionFactor: product.conversionFactor,
+        costPrice: Number(product.costPrice || 0),
+        sellingPrice: Number(product.sellingPrice || 0),
+        currentStock: Number(product.currentStock || 0),
+        reorderLevel: Number(product.reorderLevel || 10),
+        openingStock: product.openingStock !== undefined ? Number(product.openingStock) : undefined,
+        openingRate: product.openingRate !== undefined ? Number(product.openingRate) : undefined,
+        openingValue: product.openingValue !== undefined ? Number(product.openingValue) : undefined,
+        excelStockValue: product.excelStockValue !== undefined ? Number(product.excelStockValue) : undefined,
+        calculatedStockValue: product.calculatedStockValue !== undefined ? Number(product.calculatedStockValue) : undefined,
+        valueDifference: product.valueDifference !== undefined ? Number(product.valueDifference) : undefined,
+        importSource: product.importSource,
+        importBatchId: product.importBatchId,
+        warehouseId: product.warehouseId,
+        warehouseName: product.warehouseName,
+        createdAt: now,
+        updatedAt: now
+      };
+    }
+
+    const creds = getActiveSupabaseCredentials();
+    const isCloud = Boolean(creds.url && creds.key);
+
+    if (isCloud) {
+      const syncRes = await SupabaseSyncService.syncProduct(targetProduct);
+      if (syncRes.success) {
+        const currentList = getItem<Product[]>(STORAGE_KEYS.PRODUCTS, INITIAL_PRODUCTS);
+        const idx = currentList.findIndex((p) => p.id === targetProduct.id);
+        if (idx !== -1) {
+          currentList[idx] = targetProduct;
+        } else {
+          currentList.unshift(targetProduct);
+        }
+        setItem(STORAGE_KEYS.PRODUCTS, currentList);
+        removePendingSyncId('products', targetProduct.id);
+        return {
+          success: true,
+          data: targetProduct,
+          isCloudConfirmed: true,
+          message: `Product "${targetProduct.name}" saved and verified in database.`
+        };
+      } else {
+        const isOffline = typeof navigator !== 'undefined' && !navigator.onLine;
+        if (isOffline) {
+          const currentList = getItem<Product[]>(STORAGE_KEYS.PRODUCTS, INITIAL_PRODUCTS);
+          const idx = currentList.findIndex((p) => p.id === targetProduct.id);
+          if (idx !== -1) {
+            currentList[idx] = targetProduct;
+          } else {
+            currentList.unshift(targetProduct);
+          }
+          setItem(STORAGE_KEYS.PRODUCTS, currentList);
+          addPendingSyncId('products', targetProduct.id);
+          return {
+            success: true,
+            data: targetProduct,
+            isOfflineCached: true,
+            message: `Saved locally (offline mode). Queued for sync.`
+          };
+        }
+        return {
+          success: false,
+          error: syncRes.error || 'Failed to save product to cloud database.'
+        };
+      }
+    } else {
+      const saved = this.saveProduct(targetProduct, targetCompId);
+      return {
+        success: true,
+        data: saved,
+        isLocalOnly: true,
+        message: `Product "${saved.name}" saved to inventory.`
+      };
+    }
+  },
+
+  async deleteProductAsync(id: string): Promise<{ success: boolean; message?: string; error?: string }> {
+    const creds = getActiveSupabaseCredentials();
+    const isCloud = Boolean(creds.url && creds.key);
+
+    if (isCloud) {
+      const res = await SupabaseSyncService.deleteProduct(id);
+      if (res.success) {
+        this.deleteProduct(id);
+        return { success: true, message: 'Product deleted from database.' };
+      } else {
+        const isOffline = typeof navigator !== 'undefined' && !navigator.onLine;
+        if (isOffline) {
+          this.deleteProduct(id);
+          return { success: true, message: 'Product deleted locally (offline).' };
+        }
+        return { success: false, error: res.error || 'Failed to delete product from database.' };
+      }
+    } else {
+      this.deleteProduct(id);
+      return { success: true, message: 'Product deleted.' };
+    }
   },
 
   // Recalculate and synchronize product currentStock based on Opening Stock + Total Purchases - Total Sales
@@ -930,6 +1456,232 @@ export const StorageService = {
     SupabaseSyncService.deleteSaleInvoice(id).catch(() => {});
   },
 
+  async createSaleInvoiceAsync(
+    invoiceData: Omit<SaleInvoice, 'id' | 'invoiceNumber' | 'createdAt'>,
+    companyId?: string
+  ): Promise<{
+    success: boolean;
+    data?: SaleInvoice;
+    isCloudConfirmed?: boolean;
+    isOfflineCached?: boolean;
+    isLocalOnly?: boolean;
+    message?: string;
+    error?: string;
+  }> {
+    const sales = this.getSales();
+    const targetCompId = invoiceData.companyId || companyId || DEFAULT_COMPANY_ID;
+    const products = this.getProducts();
+    const customers = this.getCustomers();
+    const settings = this.getSettings();
+
+    // 1. Stock Check if negative stock disabled
+    if (!settings.allowNegativeStock) {
+      for (const item of invoiceData.items) {
+        const prod = products.find(
+          (p) =>
+            (p.id === item.productId || p.code === item.productCode) &&
+            (p.companyId || DEFAULT_COMPANY_ID) === targetCompId
+        );
+        if (prod) {
+          if (prod.currentStock < item.quantity) {
+            return {
+              success: false,
+              error: `Insufficient stock for "${prod.name}". Available: ${prod.currentStock}, Requested: ${item.quantity}. Enable 'Allow Negative Stock' in Settings to override.`
+            };
+          }
+        }
+      }
+    }
+
+    // 2. Generate Invoice Number for this company
+    const compSales = sales.filter((s) => (s.companyId || DEFAULT_COMPANY_ID) === targetCompId);
+    const count = compSales.length + 1;
+    const invNumber = `INV-${new Date().getFullYear()}-${String(count).padStart(4, '0')}`;
+
+    const newInvoice: SaleInvoice = {
+      ...invoiceData,
+      companyId: targetCompId,
+      id: `sale-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+      invoiceNumber: invNumber,
+      createdAt: new Date().toISOString()
+    };
+
+    const creds = getActiveSupabaseCredentials();
+    const isCloud = Boolean(creds.url && creds.key);
+
+    if (isCloud) {
+      const syncRes = await SupabaseSyncService.syncSaleInvoice(newInvoice);
+      if (syncRes.success) {
+        // Stock reductions & local sync
+        for (const item of invoiceData.items) {
+          let pIndex = -1;
+          if (item.productId) {
+            pIndex = products.findIndex((p) => p.id === item.productId);
+          }
+          if (pIndex === -1 && item.productCode) {
+            const cleanCode = item.productCode.trim().toLowerCase();
+            pIndex = products.findIndex((p) => p.code?.trim().toLowerCase() === cleanCode && (p.companyId || DEFAULT_COMPANY_ID) === targetCompId);
+            if (pIndex === -1) pIndex = products.findIndex((p) => p.code?.trim().toLowerCase() === cleanCode);
+          }
+          if (pIndex === -1 && item.productName) {
+            const cleanName = item.productName.trim().toLowerCase();
+            pIndex = products.findIndex((p) => p.name?.trim().toLowerCase() === cleanName && (p.companyId || DEFAULT_COMPANY_ID) === targetCompId);
+          }
+
+          if (pIndex !== -1) {
+            products[pIndex].currentStock = Math.max(0, Number(products[pIndex].currentStock || 0) - Number(item.quantity || 0));
+            products[pIndex].updatedAt = new Date().toISOString();
+            SupabaseSyncService.syncProduct(products[pIndex]).catch(() => {});
+          }
+        }
+        setItem(STORAGE_KEYS.PRODUCTS, products);
+
+        // Apply Customer Outstanding
+        if (invoiceData.customerId && invoiceData.dueAmount > 0) {
+          const cIndex = customers.findIndex(
+            (c) => c.id === invoiceData.customerId && (c.companyId || DEFAULT_COMPANY_ID) === targetCompId
+          );
+          if (cIndex !== -1) {
+            customers[cIndex].outstandingBalance = Number(customers[cIndex].outstandingBalance || 0) + Number(invoiceData.dueAmount);
+            customers[cIndex].updatedAt = new Date().toISOString();
+            SupabaseSyncService.syncCustomer(customers[cIndex]).catch(() => {});
+            setItem(STORAGE_KEYS.CUSTOMERS, customers);
+          }
+        }
+
+        const currentSales = getItem<SaleInvoice[]>(STORAGE_KEYS.SALES, INITIAL_SALES);
+        currentSales.unshift(newInvoice);
+        setItem(STORAGE_KEYS.SALES, currentSales);
+        removePendingSyncId('sales', newInvoice.id);
+
+        return {
+          success: true,
+          data: newInvoice,
+          isCloudConfirmed: true,
+          message: `Invoice ${newInvoice.invoiceNumber} recorded and verified in database.`
+        };
+      } else {
+        const isOffline = typeof navigator !== 'undefined' && !navigator.onLine;
+        if (isOffline) {
+          const localInv = this.createSaleInvoice(invoiceData, targetCompId);
+          return {
+            success: true,
+            data: localInv,
+            isOfflineCached: true,
+            message: `Invoice ${localInv.invoiceNumber} saved locally (offline mode). Queued for sync.`
+          };
+        }
+        return {
+          success: false,
+          error: syncRes.error || 'Failed to save invoice to database.'
+        };
+      }
+    } else {
+      const localInv = this.createSaleInvoice(invoiceData, targetCompId);
+      return {
+        success: true,
+        data: localInv,
+        isLocalOnly: true,
+        message: `Invoice ${localInv.invoiceNumber} created.`
+      };
+    }
+  },
+
+  async updateSaleInvoiceAsync(
+    id: string,
+    invoiceData: Partial<SaleInvoice>,
+    companyId?: string
+  ): Promise<{
+    success: boolean;
+    data?: SaleInvoice;
+    isCloudConfirmed?: boolean;
+    isOfflineCached?: boolean;
+    isLocalOnly?: boolean;
+    message?: string;
+    error?: string;
+  }> {
+    const sales = getItem<SaleInvoice[]>(STORAGE_KEYS.SALES, INITIAL_SALES);
+    const targetIndex = sales.findIndex((s) => s.id === id);
+    if (targetIndex === -1) {
+      return { success: false, error: 'Sale invoice not found.' };
+    }
+
+    const oldSale = sales[targetIndex];
+    const targetCompId = oldSale.companyId || companyId || DEFAULT_COMPANY_ID;
+    const creds = getActiveSupabaseCredentials();
+    const isCloud = Boolean(creds.url && creds.key);
+
+    const updatedSale: SaleInvoice = {
+      ...oldSale,
+      ...invoiceData,
+      id: oldSale.id,
+      invoiceNumber: oldSale.invoiceNumber,
+      companyId: targetCompId,
+      createdAt: oldSale.createdAt,
+      updatedAt: new Date().toISOString()
+    };
+
+    if (isCloud) {
+      const syncRes = await SupabaseSyncService.syncSaleInvoice(updatedSale);
+      if (syncRes.success) {
+        const res = this.updateSaleInvoice(id, invoiceData, targetCompId);
+        removePendingSyncId('sales', updatedSale.id);
+        return {
+          success: true,
+          data: res,
+          isCloudConfirmed: true,
+          message: `Invoice ${updatedSale.invoiceNumber} updated in database.`
+        };
+      } else {
+        const isOffline = typeof navigator !== 'undefined' && !navigator.onLine;
+        if (isOffline) {
+          const res = this.updateSaleInvoice(id, invoiceData, targetCompId);
+          return {
+            success: true,
+            data: res,
+            isOfflineCached: true,
+            message: `Invoice modified locally (offline mode). Queued for sync.`
+          };
+        }
+        return {
+          success: false,
+          error: syncRes.error || 'Failed to update invoice in cloud database.'
+        };
+      }
+    } else {
+      const res = this.updateSaleInvoice(id, invoiceData, targetCompId);
+      return {
+        success: true,
+        data: res,
+        isLocalOnly: true,
+        message: `Invoice ${res.invoiceNumber} modified.`
+      };
+    }
+  },
+
+  async deleteSaleInvoiceAsync(id: string): Promise<{ success: boolean; message?: string; error?: string }> {
+    const creds = getActiveSupabaseCredentials();
+    const isCloud = Boolean(creds.url && creds.key);
+
+    if (isCloud) {
+      const res = await SupabaseSyncService.deleteSaleInvoice(id);
+      if (res.success) {
+        this.deleteSaleInvoice(id);
+        return { success: true, message: 'Sale invoice voided in database.' };
+      } else {
+        const isOffline = typeof navigator !== 'undefined' && !navigator.onLine;
+        if (isOffline) {
+          this.deleteSaleInvoice(id);
+          return { success: true, message: 'Sale invoice voided locally (offline).' };
+        }
+        return { success: false, error: res.error || 'Failed to void invoice in database.' };
+      }
+    } else {
+      this.deleteSaleInvoice(id);
+      return { success: true, message: 'Sale invoice voided and stock restored.' };
+    }
+  },
+
   // --- PURCHASES ---
   getPurchases(companyId?: string): PurchaseInvoice[] {
     const raw = getItem<PurchaseInvoice[]>(STORAGE_KEYS.PURCHASES, INITIAL_PURCHASES);
@@ -1272,6 +2024,167 @@ export const StorageService = {
     SupabaseSyncService.deletePurchaseInvoice(id).catch(() => {});
   },
 
+  async createPurchaseInvoiceAsync(
+    purchaseData: Omit<PurchaseInvoice, 'id' | 'purchaseNumber' | 'createdAt'>,
+    companyId?: string
+  ): Promise<{
+    success: boolean;
+    data?: PurchaseInvoice;
+    isCloudConfirmed?: boolean;
+    isOfflineCached?: boolean;
+    isLocalOnly?: boolean;
+    message?: string;
+    error?: string;
+  }> {
+    const purchases = this.getPurchases();
+    const targetCompId = purchaseData.companyId || companyId || DEFAULT_COMPANY_ID;
+    const compPurchases = purchases.filter((p) => (p.companyId || DEFAULT_COMPANY_ID) === targetCompId);
+    const count = compPurchases.length + 1;
+    const purNumber = `PUR-${new Date().getFullYear()}-${String(count).padStart(4, '0')}`;
+
+    const newPurchase: PurchaseInvoice = {
+      ...purchaseData,
+      companyId: targetCompId,
+      id: `pur-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+      purchaseNumber: purNumber,
+      createdAt: new Date().toISOString()
+    };
+
+    const creds = getActiveSupabaseCredentials();
+    const isCloud = Boolean(creds.url && creds.key);
+
+    if (isCloud) {
+      const syncRes = await SupabaseSyncService.syncPurchaseInvoice(newPurchase);
+      if (syncRes.success) {
+        const res = this.createPurchaseInvoice(purchaseData, targetCompId);
+        removePendingSyncId('purchases', res.id);
+        return {
+          success: true,
+          data: res,
+          isCloudConfirmed: true,
+          message: `Purchase bill ${res.purchaseNumber} recorded and verified in database.`
+        };
+      } else {
+        const isOffline = typeof navigator !== 'undefined' && !navigator.onLine;
+        if (isOffline) {
+          const res = this.createPurchaseInvoice(purchaseData, targetCompId);
+          return {
+            success: true,
+            data: res,
+            isOfflineCached: true,
+            message: `Purchase bill recorded locally (offline mode). Queued for sync.`
+          };
+        }
+        return {
+          success: false,
+          error: syncRes.error || 'Failed to record purchase bill in database.'
+        };
+      }
+    } else {
+      const res = this.createPurchaseInvoice(purchaseData, targetCompId);
+      return {
+        success: true,
+        data: res,
+        isLocalOnly: true,
+        message: `Purchase bill ${res.purchaseNumber} recorded.`
+      };
+    }
+  },
+
+  async updatePurchaseInvoiceAsync(
+    id: string,
+    purchaseData: Partial<PurchaseInvoice>,
+    companyId?: string
+  ): Promise<{
+    success: boolean;
+    data?: PurchaseInvoice;
+    isCloudConfirmed?: boolean;
+    isOfflineCached?: boolean;
+    isLocalOnly?: boolean;
+    message?: string;
+    error?: string;
+  }> {
+    const purchases = getItem<PurchaseInvoice[]>(STORAGE_KEYS.PURCHASES, INITIAL_PURCHASES);
+    const targetIndex = purchases.findIndex((p) => p.id === id);
+    if (targetIndex === -1) {
+      return { success: false, error: 'Purchase invoice not found.' };
+    }
+
+    const oldPur = purchases[targetIndex];
+    const targetCompId = oldPur.companyId || companyId || DEFAULT_COMPANY_ID;
+    const creds = getActiveSupabaseCredentials();
+    const isCloud = Boolean(creds.url && creds.key);
+
+    const updatedPurchase: PurchaseInvoice = {
+      ...oldPur,
+      ...purchaseData,
+      id: oldPur.id,
+      purchaseNumber: oldPur.purchaseNumber,
+      companyId: targetCompId,
+      updatedAt: new Date().toISOString()
+    };
+
+    if (isCloud) {
+      const syncRes = await SupabaseSyncService.syncPurchaseInvoice(updatedPurchase);
+      if (syncRes.success) {
+        const res = this.updatePurchaseInvoice(id, purchaseData, targetCompId);
+        removePendingSyncId('purchases', updatedPurchase.id);
+        return {
+          success: true,
+          data: res,
+          isCloudConfirmed: true,
+          message: `Purchase bill ${updatedPurchase.purchaseNumber} updated in database.`
+        };
+      } else {
+        const isOffline = typeof navigator !== 'undefined' && !navigator.onLine;
+        if (isOffline) {
+          const res = this.updatePurchaseInvoice(id, purchaseData, targetCompId);
+          return {
+            success: true,
+            data: res,
+            isOfflineCached: true,
+            message: `Purchase bill updated locally (offline mode). Queued for sync.`
+          };
+        }
+        return {
+          success: false,
+          error: syncRes.error || 'Failed to update purchase bill in database.'
+        };
+      }
+    } else {
+      const res = this.updatePurchaseInvoice(id, purchaseData, targetCompId);
+      return {
+        success: true,
+        data: res,
+        isLocalOnly: true,
+        message: `Purchase bill ${res.purchaseNumber} modified.`
+      };
+    }
+  },
+
+  async deletePurchaseInvoiceAsync(id: string): Promise<{ success: boolean; message?: string; error?: string }> {
+    const creds = getActiveSupabaseCredentials();
+    const isCloud = Boolean(creds.url && creds.key);
+
+    if (isCloud) {
+      const res = await SupabaseSyncService.deletePurchaseInvoice(id);
+      if (res.success) {
+        this.deletePurchaseInvoice(id);
+        return { success: true, message: 'Purchase bill voided in database.' };
+      } else {
+        const isOffline = typeof navigator !== 'undefined' && !navigator.onLine;
+        if (isOffline) {
+          this.deletePurchaseInvoice(id);
+          return { success: true, message: 'Purchase bill voided locally (offline).' };
+        }
+        return { success: false, error: res.error || 'Failed to void purchase bill in database.' };
+      }
+    } else {
+      this.deletePurchaseInvoice(id);
+      return { success: true, message: 'Purchase bill voided and stock reversed.' };
+    }
+  },
+
   // --- CUSTOMER RECEIPTS ---
   getReceipts(companyId?: string): CustomerReceipt[] {
     const raw = getItem<CustomerReceipt[]>(STORAGE_KEYS.RECEIPTS, INITIAL_RECEIPTS);
@@ -1378,6 +2291,96 @@ export const StorageService = {
     const cleanReceipts = receipts.filter((r) => r.id !== id);
     setItem(STORAGE_KEYS.RECEIPTS, cleanReceipts);
     SupabaseSyncService.deleteReceipt(id).catch(() => {});
+  },
+
+  async createCustomerReceiptAsync(
+    receiptData: Omit<CustomerReceipt, 'id' | 'receiptNumber' | 'createdAt'>,
+    companyId?: string
+  ): Promise<{
+    success: boolean;
+    data?: CustomerReceipt;
+    isCloudConfirmed?: boolean;
+    isOfflineCached?: boolean;
+    isLocalOnly?: boolean;
+    message?: string;
+    error?: string;
+  }> {
+    const receipts = this.getReceipts();
+    const targetCompId = receiptData.companyId || companyId || DEFAULT_COMPANY_ID;
+    const compReceipts = receipts.filter((r) => (r.companyId || DEFAULT_COMPANY_ID) === targetCompId);
+    const count = compReceipts.length + 1;
+    const recNumber = `REC-${new Date().getFullYear()}-${String(count).padStart(4, '0')}`;
+
+    const newReceipt: CustomerReceipt = {
+      ...receiptData,
+      companyId: targetCompId,
+      id: `rec-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+      receiptNumber: recNumber,
+      createdAt: new Date().toISOString()
+    };
+
+    const creds = getActiveSupabaseCredentials();
+    const isCloud = Boolean(creds.url && creds.key);
+
+    if (isCloud) {
+      const syncRes = await SupabaseSyncService.syncReceipt(newReceipt);
+      if (syncRes.success) {
+        const res = this.createCustomerReceipt(receiptData, targetCompId);
+        removePendingSyncId('receipts', res.id);
+        return {
+          success: true,
+          data: res,
+          isCloudConfirmed: true,
+          message: `Customer receipt ${res.receiptNumber} recorded in database.`
+        };
+      } else {
+        const isOffline = typeof navigator !== 'undefined' && !navigator.onLine;
+        if (isOffline) {
+          const res = this.createCustomerReceipt(receiptData, targetCompId);
+          return {
+            success: true,
+            data: res,
+            isOfflineCached: true,
+            message: `Receipt recorded locally (offline mode). Queued for sync.`
+          };
+        }
+        return {
+          success: false,
+          error: syncRes.error || 'Failed to record receipt in database.'
+        };
+      }
+    } else {
+      const res = this.createCustomerReceipt(receiptData, targetCompId);
+      return {
+        success: true,
+        data: res,
+        isLocalOnly: true,
+        message: `Customer receipt ${res.receiptNumber} recorded.`
+      };
+    }
+  },
+
+  async deleteCustomerReceiptAsync(id: string): Promise<{ success: boolean; message?: string; error?: string }> {
+    const creds = getActiveSupabaseCredentials();
+    const isCloud = Boolean(creds.url && creds.key);
+
+    if (isCloud) {
+      const res = await SupabaseSyncService.deleteReceipt(id);
+      if (res.success) {
+        this.deleteCustomerReceipt(id);
+        return { success: true, message: 'Receipt voided in database.' };
+      } else {
+        const isOffline = typeof navigator !== 'undefined' && !navigator.onLine;
+        if (isOffline) {
+          this.deleteCustomerReceipt(id);
+          return { success: true, message: 'Receipt voided locally (offline).' };
+        }
+        return { success: false, error: res.error || 'Failed to void receipt in database.' };
+      }
+    } else {
+      this.deleteCustomerReceipt(id);
+      return { success: true, message: 'Receipt voided and customer balance adjusted.' };
+    }
   },
 
   // --- SUPPLIER PAYMENTS ---
@@ -1488,6 +2491,96 @@ export const StorageService = {
     SupabaseSyncService.deletePayment(id).catch(() => {});
   },
 
+  async createSupplierPaymentAsync(
+    paymentData: Omit<SupplierPayment, 'id' | 'paymentNumber' | 'createdAt'>,
+    companyId?: string
+  ): Promise<{
+    success: boolean;
+    data?: SupplierPayment;
+    isCloudConfirmed?: boolean;
+    isOfflineCached?: boolean;
+    isLocalOnly?: boolean;
+    message?: string;
+    error?: string;
+  }> {
+    const payments = this.getPayments();
+    const targetCompId = paymentData.companyId || companyId || DEFAULT_COMPANY_ID;
+    const compPayments = payments.filter((p) => (p.companyId || DEFAULT_COMPANY_ID) === targetCompId);
+    const count = compPayments.length + 1;
+    const payNumber = `PAY-${new Date().getFullYear()}-${String(count).padStart(4, '0')}`;
+
+    const newPayment: SupplierPayment = {
+      ...paymentData,
+      companyId: targetCompId,
+      id: `pay-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+      paymentNumber: payNumber,
+      createdAt: new Date().toISOString()
+    };
+
+    const creds = getActiveSupabaseCredentials();
+    const isCloud = Boolean(creds.url && creds.key);
+
+    if (isCloud) {
+      const syncRes = await SupabaseSyncService.syncPayment(newPayment);
+      if (syncRes.success) {
+        const res = this.createSupplierPayment(paymentData, targetCompId);
+        removePendingSyncId('payments', res.id);
+        return {
+          success: true,
+          data: res,
+          isCloudConfirmed: true,
+          message: `Supplier payment ${res.paymentNumber} recorded in database.`
+        };
+      } else {
+        const isOffline = typeof navigator !== 'undefined' && !navigator.onLine;
+        if (isOffline) {
+          const res = this.createSupplierPayment(paymentData, targetCompId);
+          return {
+            success: true,
+            data: res,
+            isOfflineCached: true,
+            message: `Payment recorded locally (offline mode). Queued for sync.`
+          };
+        }
+        return {
+          success: false,
+          error: syncRes.error || 'Failed to record supplier payment in database.'
+        };
+      }
+    } else {
+      const res = this.createSupplierPayment(paymentData, targetCompId);
+      return {
+        success: true,
+        data: res,
+        isLocalOnly: true,
+        message: `Supplier payment ${res.paymentNumber} recorded.`
+      };
+    }
+  },
+
+  async deleteSupplierPaymentAsync(id: string): Promise<{ success: boolean; message?: string; error?: string }> {
+    const creds = getActiveSupabaseCredentials();
+    const isCloud = Boolean(creds.url && creds.key);
+
+    if (isCloud) {
+      const res = await SupabaseSyncService.deletePayment(id);
+      if (res.success) {
+        this.deleteSupplierPayment(id);
+        return { success: true, message: 'Supplier payment voided in database.' };
+      } else {
+        const isOffline = typeof navigator !== 'undefined' && !navigator.onLine;
+        if (isOffline) {
+          this.deleteSupplierPayment(id);
+          return { success: true, message: 'Supplier payment voided locally (offline).' };
+        }
+        return { success: false, error: res.error || 'Failed to void supplier payment in database.' };
+      }
+    } else {
+      this.deleteSupplierPayment(id);
+      return { success: true, message: 'Payment voided and supplier balance adjusted.' };
+    }
+  },
+
   // --- EXPENSES ---
   getExpenses(companyId?: string): Expense[] {
     const raw = getItem<Expense[]>(STORAGE_KEYS.EXPENSES, INITIAL_EXPENSES);
@@ -1533,6 +2626,96 @@ export const StorageService = {
     const cleanExpenses = expenses.filter((e) => e.id !== id);
     setItem(STORAGE_KEYS.EXPENSES, cleanExpenses);
     SupabaseSyncService.deleteExpense(id).catch(() => {});
+  },
+
+  async createExpenseAsync(
+    expenseData: Omit<Expense, 'id' | 'expenseNumber' | 'createdAt'>,
+    companyId?: string
+  ): Promise<{
+    success: boolean;
+    data?: Expense;
+    isCloudConfirmed?: boolean;
+    isOfflineCached?: boolean;
+    isLocalOnly?: boolean;
+    message?: string;
+    error?: string;
+  }> {
+    const expenses = this.getExpenses();
+    const targetCompId = expenseData.companyId || companyId || DEFAULT_COMPANY_ID;
+    const compExpenses = expenses.filter((e) => (e.companyId || DEFAULT_COMPANY_ID) === targetCompId);
+    const count = compExpenses.length + 1;
+    const expNumber = `EXP-${new Date().getFullYear()}-${String(count).padStart(4, '0')}`;
+
+    const newExpense: Expense = {
+      ...expenseData,
+      companyId: targetCompId,
+      id: `exp-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+      expenseNumber: expNumber,
+      createdAt: new Date().toISOString()
+    };
+
+    const creds = getActiveSupabaseCredentials();
+    const isCloud = Boolean(creds.url && creds.key);
+
+    if (isCloud) {
+      const syncRes = await SupabaseSyncService.syncExpense(newExpense);
+      if (syncRes.success) {
+        const res = this.createExpense(expenseData, targetCompId);
+        removePendingSyncId('expenses', res.id);
+        return {
+          success: true,
+          data: res,
+          isCloudConfirmed: true,
+          message: `Expense ${res.expenseNumber} recorded in database.`
+        };
+      } else {
+        const isOffline = typeof navigator !== 'undefined' && !navigator.onLine;
+        if (isOffline) {
+          const res = this.createExpense(expenseData, targetCompId);
+          return {
+            success: true,
+            data: res,
+            isOfflineCached: true,
+            message: `Expense recorded locally (offline mode). Queued for sync.`
+          };
+        }
+        return {
+          success: false,
+          error: syncRes.error || 'Failed to record expense in database.'
+        };
+      }
+    } else {
+      const res = this.createExpense(expenseData, targetCompId);
+      return {
+        success: true,
+        data: res,
+        isLocalOnly: true,
+        message: `Expense ${res.expenseNumber} recorded.`
+      };
+    }
+  },
+
+  async deleteExpenseAsync(id: string): Promise<{ success: boolean; message?: string; error?: string }> {
+    const creds = getActiveSupabaseCredentials();
+    const isCloud = Boolean(creds.url && creds.key);
+
+    if (isCloud) {
+      const res = await SupabaseSyncService.deleteExpense(id);
+      if (res.success) {
+        this.deleteExpense(id);
+        return { success: true, message: 'Expense deleted from database.' };
+      } else {
+        const isOffline = typeof navigator !== 'undefined' && !navigator.onLine;
+        if (isOffline) {
+          this.deleteExpense(id);
+          return { success: true, message: 'Expense deleted locally (offline).' };
+        }
+        return { success: false, error: res.error || 'Failed to delete expense from database.' };
+      }
+    } else {
+      this.deleteExpense(id);
+      return { success: true, message: 'Expense deleted.' };
+    }
   },
 
   // --- CASH BALANCE & DASHBOARD STATS ---

@@ -298,11 +298,15 @@ export default function App() {
     }
   };
 
-  const handleSaveCompany = (compData: Partial<Company>) => {
-    const savedComp = StorageService.saveCompany(compData);
+  const handleSaveCompany = async (compData: Partial<Company>) => {
+    const res = await StorageService.saveCompanyAsync(compData);
     setCompanies(StorageService.getCompanies());
     refreshSession();
-    addToast('success', `Company "${savedComp.companyName}" saved successfully.`);
+    if (res.success) {
+      addToast('success', res.message || `Company "${res.data?.companyName || 'Company'}" saved successfully.`);
+    } else {
+      addToast('error', res.error || 'Failed to save company to database.');
+    }
   };
 
   const handleToggleCompanyStatus = (companyId: string, disable: boolean) => {
@@ -318,234 +322,308 @@ export default function App() {
   const recentTransactions: TransactionRecord[] = StorageService.getRecentTransactions(activeCompId);
 
   // Handlers for Customers
-  const handleSaveCustomer = (custData: Partial<Customer>) => {
-    StorageService.saveCustomer(custData, activeCompId);
-    refreshAllStates(activeCompId);
-    if (session) {
-      AuthService.recordAuditLog(
-        custData.id ? 'CUSTOMER_EDITED' : 'CUSTOMER_CREATED',
-        'customers',
-        `Saved customer record: ${custData.name}`,
-        custData.id
-      );
+  const handleSaveCustomer = async (custData: Partial<Customer>) => {
+    const res = await StorageService.saveCustomerAsync(custData, activeCompId);
+    if (res.success) {
+      refreshAllStates(activeCompId);
+      if (session) {
+        AuthService.recordAuditLog(
+          custData.id ? 'CUSTOMER_EDITED' : 'CUSTOMER_CREATED',
+          'customers',
+          `Saved customer record: ${custData.name}`,
+          custData.id || res.data?.id
+        );
+      }
+      addToast('success', res.message || 'Customer profile saved successfully.');
+    } else {
+      addToast('error', res.error || 'Failed to save customer to database.');
     }
-    addToast('success', 'Customer profile updated.');
   };
 
-  const handleDeleteCustomer = (id: string) => {
-    StorageService.deleteCustomer(id);
+  const handleDeleteCustomer = async (id: string) => {
+    const res = await StorageService.deleteCustomerAsync(id);
     refreshAllStates(activeCompId);
-    if (session) {
-      AuthService.recordAuditLog('CUSTOMER_DELETED', 'customers', `Deleted customer record ${id}`, id);
+    if (res.success) {
+      if (session) {
+        AuthService.recordAuditLog('CUSTOMER_DELETED', 'customers', `Deleted customer record ${id}`, id);
+      }
+      addToast('info', res.message || 'Customer removed.');
+    } else {
+      addToast('error', res.error || 'Failed to delete customer.');
     }
-    addToast('info', 'Customer removed.');
   };
 
   // Handlers for Suppliers
-  const handleSaveSupplier = (suppData: Partial<Supplier>) => {
-    StorageService.saveSupplier(suppData, activeCompId);
-    refreshAllStates(activeCompId);
-    if (session) {
-      AuthService.recordAuditLog(
-        suppData.id ? 'SUPPLIER_EDITED' : 'SUPPLIER_CREATED',
-        'suppliers',
-        `Saved supplier record: ${suppData.name}`,
-        suppData.id
-      );
+  const handleSaveSupplier = async (suppData: Partial<Supplier>) => {
+    const res = await StorageService.saveSupplierAsync(suppData, activeCompId);
+    if (res.success) {
+      refreshAllStates(activeCompId);
+      if (session) {
+        AuthService.recordAuditLog(
+          suppData.id ? 'SUPPLIER_EDITED' : 'SUPPLIER_CREATED',
+          'suppliers',
+          `Saved supplier record: ${suppData.name}`,
+          suppData.id || res.data?.id
+        );
+      }
+      addToast('success', res.message || 'Supplier profile saved successfully.');
+    } else {
+      addToast('error', res.error || 'Failed to save supplier to database.');
     }
-    addToast('success', 'Supplier profile updated.');
   };
 
-  const handleDeleteSupplier = (id: string) => {
-    StorageService.deleteSupplier(id);
+  const handleDeleteSupplier = async (id: string) => {
+    const res = await StorageService.deleteSupplierAsync(id);
     refreshAllStates(activeCompId);
-    if (session) {
-      AuthService.recordAuditLog('SUPPLIER_DELETED', 'suppliers', `Deleted supplier record ${id}`, id);
+    if (res.success) {
+      if (session) {
+        AuthService.recordAuditLog('SUPPLIER_DELETED', 'suppliers', `Deleted supplier record ${id}`, id);
+      }
+      addToast('info', res.message || 'Supplier removed.');
+    } else {
+      addToast('error', res.error || 'Failed to delete supplier.');
     }
-    addToast('info', 'Supplier removed.');
   };
 
   // Handlers for Products
-  const handleSaveProduct = (prodData: Partial<Product>) => {
-    StorageService.saveProduct(prodData, activeCompId);
-    refreshAllStates(activeCompId);
-    if (session) {
-      AuthService.recordAuditLog(
-        prodData.id ? 'PRODUCT_EDITED' : 'PRODUCT_CREATED',
-        'products',
-        `Saved product: ${prodData.name} (${prodData.code})`,
-        prodData.id
-      );
+  const handleSaveProduct = async (prodData: Partial<Product>) => {
+    const res = await StorageService.saveProductAsync(prodData, activeCompId);
+    if (res.success) {
+      refreshAllStates(activeCompId);
+      if (session) {
+        AuthService.recordAuditLog(
+          prodData.id ? 'PRODUCT_EDITED' : 'PRODUCT_CREATED',
+          'products',
+          `Saved product: ${prodData.name} (${prodData.code})`,
+          prodData.id || res.data?.id
+        );
+      }
+      addToast('success', res.message || `Product "${prodData.name}" saved successfully.`);
+    } else {
+      addToast('error', res.error || 'Failed to save product to database.');
     }
   };
 
-  const handleDeleteProduct = (id: string) => {
-    StorageService.deleteProduct(id);
+  const handleDeleteProduct = async (id: string) => {
+    const res = await StorageService.deleteProductAsync(id);
     refreshAllStates(activeCompId);
-    if (session) {
-      AuthService.recordAuditLog('PRODUCT_DELETED', 'products', `Deleted product ${id}`, id);
+    if (res.success) {
+      if (session) {
+        AuthService.recordAuditLog('PRODUCT_DELETED', 'products', `Deleted product ${id}`, id);
+      }
+      addToast('info', res.message || 'Product removed.');
+    } else {
+      addToast('error', res.error || 'Failed to delete product.');
     }
   };
 
   // Handlers for Invoices & Purchases
-  const handleCreateSaleInvoice = (
+  const handleCreateSaleInvoice = async (
     invoiceData: Omit<SaleInvoice, 'id' | 'invoiceNumber' | 'createdAt'>
-  ) => {
-    const newInv = StorageService.createSaleInvoice(invoiceData, activeCompId);
-    refreshAllStates(activeCompId);
-    if (session) {
-      AuthService.recordAuditLog(
-        'SALE_CREATED',
-        'sales',
-        `Created invoice ${newInv.invoiceNumber} for ${newInv.customerName} (${settings.currencySymbol} ${newInv.grandTotal})`,
-        newInv.id
-      );
+  ): Promise<SaleInvoice> => {
+    const res = await StorageService.createSaleInvoiceAsync(invoiceData, activeCompId);
+    if (res.success && res.data) {
+      refreshAllStates(activeCompId);
+      if (session) {
+        AuthService.recordAuditLog(
+          'SALE_CREATED',
+          'sales',
+          `Created invoice ${res.data.invoiceNumber} for ${res.data.customerName} (${settings.currencySymbol} ${res.data.grandTotal})`,
+          res.data.id
+        );
+      }
+      return res.data;
+    } else {
+      throw new Error(res.error || 'Failed to save sale invoice.');
     }
-    return newInv;
   };
 
-  const handleUpdateSaleInvoice = (
+  const handleUpdateSaleInvoice = async (
     id: string,
     invoiceData: Partial<SaleInvoice>
-  ) => {
-    const updatedInv = StorageService.updateSaleInvoice(id, invoiceData, activeCompId);
-    refreshAllStates(activeCompId);
-    if (session) {
-      AuthService.recordAuditLog(
-        'SALE_EDITED',
-        'sales',
-        `Modified sale invoice ${updatedInv.invoiceNumber} for ${updatedInv.customerName}`,
-        updatedInv.id
-      );
+  ): Promise<SaleInvoice> => {
+    const res = await StorageService.updateSaleInvoiceAsync(id, invoiceData, activeCompId);
+    if (res.success && res.data) {
+      refreshAllStates(activeCompId);
+      if (session) {
+        AuthService.recordAuditLog(
+          'SALE_EDITED',
+          'sales',
+          `Modified sale invoice ${res.data.invoiceNumber} for ${res.data.customerName}`,
+          res.data.id
+        );
+      }
+      return res.data;
+    } else {
+      throw new Error(res.error || 'Failed to update sale invoice.');
     }
-    return updatedInv;
   };
 
-  const handleDeleteSaleInvoice = (id: string) => {
-    StorageService.deleteSaleInvoice(id);
+  const handleDeleteSaleInvoice = async (id: string) => {
+    const res = await StorageService.deleteSaleInvoiceAsync(id);
     refreshAllStates(activeCompId);
-    if (session) {
-      AuthService.recordAuditLog('SALE_DELETED', 'sales', `Voided sale invoice ${id}`, id);
+    if (res.success) {
+      if (session) {
+        AuthService.recordAuditLog('SALE_DELETED', 'sales', `Voided sale invoice ${id}`, id);
+      }
+      addToast('info', res.message || 'Sale invoice voided.');
+    } else {
+      addToast('error', res.error || 'Failed to void sale invoice.');
     }
-    addToast('info', 'Sale invoice voided and stock restored.');
   };
 
-  const handleCreatePurchaseInvoice = (
+  const handleCreatePurchaseInvoice = async (
     purchaseData: Omit<PurchaseInvoice, 'id' | 'purchaseNumber' | 'createdAt'>
-  ) => {
-    const newPur = StorageService.createPurchaseInvoice(purchaseData, activeCompId);
-    refreshAllStates(activeCompId);
-    if (session) {
-      AuthService.recordAuditLog(
-        'PURCHASE_CREATED',
-        'purchases',
-        `Recorded purchase ${newPur.purchaseNumber} from ${newPur.supplierName}`,
-        newPur.id
-      );
+  ): Promise<PurchaseInvoice> => {
+    const res = await StorageService.createPurchaseInvoiceAsync(purchaseData, activeCompId);
+    if (res.success && res.data) {
+      refreshAllStates(activeCompId);
+      if (session) {
+        AuthService.recordAuditLog(
+          'PURCHASE_CREATED',
+          'purchases',
+          `Recorded purchase ${res.data.purchaseNumber} from ${res.data.supplierName}`,
+          res.data.id
+        );
+      }
+      return res.data;
+    } else {
+      throw new Error(res.error || 'Failed to record purchase bill.');
     }
-    return newPur;
   };
 
-  const handleUpdatePurchaseInvoice = (
+  const handleUpdatePurchaseInvoice = async (
     id: string,
     purchaseData: Partial<PurchaseInvoice>
-  ) => {
-    const updatedPur = StorageService.updatePurchaseInvoice(id, purchaseData, activeCompId);
-    refreshAllStates(activeCompId);
-    if (session) {
-      AuthService.recordAuditLog(
-        'PURCHASE_EDITED',
-        'purchases',
-        `Modified purchase ${updatedPur.purchaseNumber} from ${updatedPur.supplierName}`,
-        updatedPur.id
-      );
+  ): Promise<PurchaseInvoice> => {
+    const res = await StorageService.updatePurchaseInvoiceAsync(id, purchaseData, activeCompId);
+    if (res.success && res.data) {
+      refreshAllStates(activeCompId);
+      if (session) {
+        AuthService.recordAuditLog(
+          'PURCHASE_EDITED',
+          'purchases',
+          `Modified purchase ${res.data.purchaseNumber} from ${res.data.supplierName}`,
+          res.data.id
+        );
+      }
+      return res.data;
+    } else {
+      throw new Error(res.error || 'Failed to update purchase bill.');
     }
-    return updatedPur;
   };
 
-  const handleDeletePurchaseInvoice = (id: string) => {
-    StorageService.deletePurchaseInvoice(id);
+  const handleDeletePurchaseInvoice = async (id: string) => {
+    const res = await StorageService.deletePurchaseInvoiceAsync(id);
     refreshAllStates(activeCompId);
-    if (session) {
-      AuthService.recordAuditLog('PURCHASE_DELETED', 'purchases', `Voided purchase bill ${id}`, id);
+    if (res.success) {
+      if (session) {
+        AuthService.recordAuditLog('PURCHASE_DELETED', 'purchases', `Voided purchase bill ${id}`, id);
+      }
+      addToast('info', res.message || 'Purchase invoice voided.');
+    } else {
+      addToast('error', res.error || 'Failed to void purchase bill.');
     }
-    addToast('info', 'Purchase invoice voided and stock reversed.');
   };
 
   // Handlers for Payments
-  const handleCreateReceipt = (
+  const handleCreateReceipt = async (
     receiptData: Omit<CustomerReceipt, 'id' | 'receiptNumber' | 'createdAt'>
-  ) => {
-    const rec = StorageService.createCustomerReceipt(receiptData, activeCompId);
-    refreshAllStates(activeCompId);
-    if (session) {
-      AuthService.recordAuditLog(
-        'RECEIPT_CREATED',
-        'customer_receipts',
-        `Created receipt ${rec.receiptNumber} (${settings.currencySymbol} ${rec.amount})`,
-        rec.id
-      );
+  ): Promise<CustomerReceipt> => {
+    const res = await StorageService.createCustomerReceiptAsync(receiptData, activeCompId);
+    if (res.success && res.data) {
+      refreshAllStates(activeCompId);
+      if (session) {
+        AuthService.recordAuditLog(
+          'RECEIPT_CREATED',
+          'customer_receipts',
+          `Created receipt ${res.data.receiptNumber} (${settings.currencySymbol} ${res.data.amount})`,
+          res.data.id
+        );
+      }
+      return res.data;
+    } else {
+      throw new Error(res.error || 'Failed to record customer receipt.');
     }
-    return rec;
   };
 
-  const handleDeleteReceipt = (id: string) => {
-    StorageService.deleteCustomerReceipt(id);
+  const handleDeleteReceipt = async (id: string) => {
+    const res = await StorageService.deleteCustomerReceiptAsync(id);
     refreshAllStates(activeCompId);
-    if (session) {
-      AuthService.recordAuditLog('RECEIPT_DELETED', 'customer_receipts', `Voided receipt ${id}`, id);
+    if (res.success) {
+      if (session) {
+        AuthService.recordAuditLog('RECEIPT_DELETED', 'customer_receipts', `Voided receipt ${id}`, id);
+      }
+      addToast('info', res.message || 'Receipt voided and customer balance adjusted.');
+    } else {
+      addToast('error', res.error || 'Failed to void receipt.');
     }
-    addToast('info', 'Receipt voided and customer balance adjusted.');
   };
 
-  const handleCreatePayment = (
+  const handleCreatePayment = async (
     paymentData: Omit<SupplierPayment, 'id' | 'paymentNumber' | 'createdAt'>
-  ) => {
-    const pay = StorageService.createSupplierPayment(paymentData, activeCompId);
-    refreshAllStates(activeCompId);
-    if (session) {
-      AuthService.recordAuditLog(
-        'PAYMENT_CREATED',
-        'supplier_payments',
-        `Created payment ${pay.paymentNumber} (${settings.currencySymbol} ${pay.amount})`,
-        pay.id
-      );
+  ): Promise<SupplierPayment> => {
+    const res = await StorageService.createSupplierPaymentAsync(paymentData, activeCompId);
+    if (res.success && res.data) {
+      refreshAllStates(activeCompId);
+      if (session) {
+        AuthService.recordAuditLog(
+          'PAYMENT_CREATED',
+          'supplier_payments',
+          `Created payment ${res.data.paymentNumber} (${settings.currencySymbol} ${res.data.amount})`,
+          res.data.id
+        );
+      }
+      return res.data;
+    } else {
+      throw new Error(res.error || 'Failed to record supplier payment.');
     }
-    return pay;
   };
 
-  const handleDeletePayment = (id: string) => {
-    StorageService.deleteSupplierPayment(id);
+  const handleDeletePayment = async (id: string) => {
+    const res = await StorageService.deleteSupplierPaymentAsync(id);
     refreshAllStates(activeCompId);
-    if (session) {
-      AuthService.recordAuditLog('PAYMENT_DELETED', 'supplier_payments', `Voided payment ${id}`, id);
+    if (res.success) {
+      if (session) {
+        AuthService.recordAuditLog('PAYMENT_DELETED', 'supplier_payments', `Voided payment ${id}`, id);
+      }
+      addToast('info', res.message || 'Payment voided and supplier balance adjusted.');
+    } else {
+      addToast('error', res.error || 'Failed to void payment.');
     }
-    addToast('info', 'Payment voided and supplier balance adjusted.');
   };
 
-  const handleCreateExpense = (
+  const handleCreateExpense = async (
     expenseData: Omit<Expense, 'id' | 'expenseNumber' | 'createdAt'>
-  ) => {
-    const exp = StorageService.createExpense(expenseData, activeCompId);
-    refreshAllStates(activeCompId);
-    if (session) {
-      AuthService.recordAuditLog(
-        'EXPENSE_CREATED',
-        'expenses',
-        `Recorded expense ${exp.expenseNumber} (${exp.category}: ${settings.currencySymbol} ${exp.amount})`,
-        exp.id
-      );
+  ): Promise<Expense> => {
+    const res = await StorageService.createExpenseAsync(expenseData, activeCompId);
+    if (res.success && res.data) {
+      refreshAllStates(activeCompId);
+      if (session) {
+        AuthService.recordAuditLog(
+          'EXPENSE_CREATED',
+          'expenses',
+          `Recorded expense ${res.data.expenseNumber} (${res.data.category}: ${settings.currencySymbol} ${res.data.amount})`,
+          res.data.id
+        );
+      }
+      return res.data;
+    } else {
+      throw new Error(res.error || 'Failed to record expense.');
     }
-    return exp;
   };
 
-  const handleDeleteExpense = (id: string) => {
-    StorageService.deleteExpense(id);
+  const handleDeleteExpense = async (id: string) => {
+    const res = await StorageService.deleteExpenseAsync(id);
     refreshAllStates(activeCompId);
-    if (session) {
-      AuthService.recordAuditLog('EXPENSE_DELETED', 'expenses', `Removed expense record ${id}`, id);
+    if (res.success) {
+      if (session) {
+        AuthService.recordAuditLog('EXPENSE_DELETED', 'expenses', `Removed expense record ${id}`, id);
+      }
+      addToast('info', res.message || 'Expense entry removed.');
+    } else {
+      addToast('error', res.error || 'Failed to delete expense.');
     }
-    addToast('info', 'Expense entry removed.');
   };
 
   // Settings & Reset
