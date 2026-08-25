@@ -463,13 +463,25 @@ CREATE TABLE IF NOT EXISTS busy_ufo_expenses (
     date DATE NOT NULL,
     category VARCHAR(100) NOT NULL,
     amount NUMERIC(12, 2) NOT NULL,
+    paid_to VARCHAR(150),
     payment_method VARCHAR(30) NOT NULL CHECK (payment_method IN ('CASH', 'BANK_TRANSFER')),
     company_id VARCHAR(50) REFERENCES companies(id) ON DELETE CASCADE,
     notes TEXT,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS busy_ufo_document_counters (
+    company_id VARCHAR(50) NOT NULL,
+    document_type VARCHAR(30) NOT NULL,
+    financial_year VARCHAR(10) NOT NULL,
+    prefix VARCHAR(15) NOT NULL,
+    last_number INTEGER NOT NULL DEFAULT 0,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (company_id, document_type, financial_year)
+);
+
 ALTER TABLE busy_ufo_expenses ADD COLUMN IF NOT EXISTS request_id VARCHAR(100);
+ALTER TABLE busy_ufo_expenses ADD COLUMN IF NOT EXISTS paid_to VARCHAR(150);
 DO $$ 
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'busy_ufo_expenses_request_id_key') THEN
@@ -704,5 +716,82 @@ BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'audit_logs' AND policyname = 'Allow all on audit_logs') THEN
         CREATE POLICY "Allow all on audit_logs" ON audit_logs FOR ALL USING (true) WITH CHECK (true);
     END IF;
+    -- Document Counters
+    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'busy_ufo_document_counters' AND policyname = 'Allow all on busy_ufo_document_counters') THEN
+        CREATE POLICY "Allow all on busy_ufo_document_counters" ON busy_ufo_document_counters FOR ALL USING (true) WITH CHECK (true);
+    END IF;
 END $$;
+
+-- ------------------------------------------------------------
+-- 8. ATOMIC NUMBER ALLOCATOR & TRANSACTION RPCs
+-- ------------------------------------------------------------
+CREATE OR REPLACE FUNCTION allocate_document_number_atomic(
+    p_company_id VARCHAR,
+    p_doc_type VARCHAR,
+    p_prefix VARCHAR,
+    p_doc_date DATE DEFAULT CURRENT_DATE
+) RETURNS VARCHAR AS $$
+DECLARE
+    v_fin_year VARCHAR(10);
+    v_next_num INTEGER;
+    v_result VARCHAR(50);
+BEGIN
+    v_fin_year := TO_CHAR(COALESCE(p_doc_date, CURRENT_DATE), 'YYYY');
+    INSERT INTO busy_ufo_document_counters (company_id, document_type, financial_year, prefix, last_number, updated_at)
+    VALUES (p_company_id, p_doc_type, v_fin_year, p_prefix, 1, CURRENT_TIMESTAMP)
+    ON CONFLICT (company_id, document_type, financial_year)
+    DO UPDATE SET 
+        last_number = busy_ufo_document_counters.last_number + 1,
+        updated_at = CURRENT_TIMESTAMP
+    RETURNING last_number INTO v_next_num;
+
+    v_result := p_prefix || '-' || v_fin_year || '-' || LPAD(v_next_num::TEXT, 4, '0');
+    RETURN v_result;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION get_next_document_number(
+    p_company_id VARCHAR,
+    p_doc_type VARCHAR,
+    p_prefix VARCHAR
+) RETURNS VARCHAR AS $$
+BEGIN
+    RETURN allocate_document_number_atomic(p_company_id, p_doc_type, p_prefix, CURRENT_DATE);
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION generate_next_sales_invoice_number_rpc(p_company_id VARCHAR) 
+RETURNS VARCHAR AS $$
+BEGIN
+    RETURN allocate_document_number_atomic(p_company_id, 'SALE', 'INV', CURRENT_DATE);
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION generate_next_purchase_number_rpc(p_company_id VARCHAR) 
+RETURNS VARCHAR AS $$
+BEGIN
+    RETURN allocate_document_number_atomic(p_company_id, 'PURCHASE', 'PUR', CURRENT_DATE);
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION generate_next_receipt_number_rpc(p_company_id VARCHAR) 
+RETURNS VARCHAR AS $$
+BEGIN
+    RETURN allocate_document_number_atomic(p_company_id, 'RECEIPT', 'REC', CURRENT_DATE);
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION generate_next_payment_number_rpc(p_company_id VARCHAR) 
+RETURNS VARCHAR AS $$
+BEGIN
+    RETURN allocate_document_number_atomic(p_company_id, 'PAYMENT', 'PAY', CURRENT_DATE);
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION generate_next_expense_number_rpc(p_company_id VARCHAR) 
+RETURNS VARCHAR AS $$
+BEGIN
+    RETURN allocate_document_number_atomic(p_company_id, 'EXPENSE', 'EXP', CURRENT_DATE);
+END;
+$$ LANGUAGE plpgsql;
 `;

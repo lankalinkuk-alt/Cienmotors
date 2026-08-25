@@ -50,11 +50,11 @@ interface PaymentsProps {
   sales: SaleInvoice[];
   purchases: PurchaseInvoice[];
   settings: AppSettings;
-  onCreateReceipt: (receipt: Omit<CustomerReceipt, 'id' | 'receiptNumber' | 'createdAt'>) => CustomerReceipt;
+  onCreateReceipt: (receipt: Omit<CustomerReceipt, 'id' | 'receiptNumber' | 'createdAt'>) => Promise<CustomerReceipt> | CustomerReceipt;
   onDeleteReceipt?: (id: string) => void;
-  onCreatePayment: (payment: Omit<SupplierPayment, 'id' | 'paymentNumber' | 'createdAt'>) => SupplierPayment;
+  onCreatePayment: (payment: Omit<SupplierPayment, 'id' | 'paymentNumber' | 'createdAt'>) => Promise<SupplierPayment> | SupplierPayment;
   onDeletePayment?: (id: string) => void;
-  onCreateExpense: (expense: Omit<Expense, 'id' | 'expenseNumber' | 'createdAt'>) => Expense;
+  onCreateExpense: (expense: Omit<Expense, 'id' | 'expenseNumber' | 'createdAt'>) => Promise<Expense> | Expense;
   onDeleteExpense?: (id: string) => void;
   showToast: (type: 'success' | 'error' | 'info', message: string) => void;
   session?: AuthSession | null;
@@ -91,6 +91,11 @@ export const Payments: React.FC<PaymentsProps> = ({
     id: string;
     type: 'RECEIPT' | 'PAYMENT' | 'EXPENSE';
   } | null>(null);
+
+  // Loading states
+  const [isSubmittingReceipt, setIsSubmittingReceipt] = useState(false);
+  const [isSubmittingPayment, setIsSubmittingPayment] = useState(false);
+  const [isSubmittingExpense, setIsSubmittingExpense] = useState(false);
 
   // Voucher Print / View Modal
   const [viewVoucher, setViewVoucher] = useState<{
@@ -284,7 +289,7 @@ export const Payments: React.FC<PaymentsProps> = ({
   };
 
   // Handlers
-  const handleCreateReceipt = (e: React.FormEvent) => {
+  const handleCreateReceipt = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!receiptCustomerId) {
       showToast('error', 'Select a customer.');
@@ -332,44 +337,51 @@ export const Payments: React.FC<PaymentsProps> = ({
 
     const unallocated = Math.max(0, Number((amt - totalReceiptAllocated).toFixed(2)));
 
-    const rec = onCreateReceipt({
-      date: new Date().toISOString().split('T')[0],
-      customerId: receiptCustomerId,
-      customerName: cust ? cust.name : 'Customer',
-      amount: amt,
-      paymentMode: receiptMode,
-      referenceNo: receiptChequeNo || receiptRef,
-      bankName: receiptBankName,
-      notes: receiptNotes,
-      allocations: allocations.length > 0 ? allocations : undefined,
-      unallocatedAmount: unallocated > 0 ? unallocated : undefined
-    });
-
-    if (receiptMode === 'CHEQUE' || receiptIsPdc) {
-      const chqNum = receiptChequeNo || receiptRef || `CHQ-${rec.receiptNumber}`;
-      StorageService.savePdcAsync({
-        type: 'RECEIVED',
-        partyId: receiptCustomerId,
-        partyType: 'CUSTOMER',
-        partyName: cust ? cust.name : 'Customer',
-        chequeNumber: chqNum,
-        bankName: receiptBankName || 'Bank',
-        chequeDate: receiptChequeDate || new Date().toISOString().split('T')[0],
+    setIsSubmittingReceipt(true);
+    try {
+      const rec = await onCreateReceipt({
+        date: new Date().toISOString().split('T')[0],
+        customerId: receiptCustomerId,
+        customerName: cust ? cust.name : 'Customer',
         amount: amt,
-        status: 'PENDING',
-        referenceVoucherNo: rec.receiptNumber,
-        notes: `Customer Receipt ${rec.receiptNumber}${receiptNotes ? `: ${receiptNotes}` : ''}`
-      }).catch((err) => console.warn('Auto PDC save error:', err));
-    }
+        paymentMode: receiptMode,
+        referenceNo: receiptChequeNo || receiptRef,
+        bankName: receiptBankName,
+        notes: receiptNotes,
+        allocations: allocations.length > 0 ? allocations : undefined,
+        unallocatedAmount: unallocated > 0 ? unallocated : undefined
+      });
 
-    const pdcNotice = (receiptMode === 'CHEQUE' || receiptIsPdc) ? ' & PDC cheque registered in PDC module' : '';
-    const allocText = allocations.length > 0 ? ` & adjusted ${allocations.length} previous bill(s)` : '';
-    showToast('success', `Receipt ${rec.receiptNumber} recorded! Balance updated${allocText}${pdcNotice}.`);
-    setIsReceiptModalOpen(false);
-    setInvoiceAllocations({});
+      if (receiptMode === 'CHEQUE' || receiptIsPdc) {
+        const chqNum = receiptChequeNo || receiptRef || `CHQ-${rec.receiptNumber}`;
+        StorageService.savePdcAsync({
+          type: 'RECEIVED',
+          partyId: receiptCustomerId,
+          partyType: 'CUSTOMER',
+          partyName: cust ? cust.name : 'Customer',
+          chequeNumber: chqNum,
+          bankName: receiptBankName || 'Bank',
+          chequeDate: receiptChequeDate || new Date().toISOString().split('T')[0],
+          amount: amt,
+          status: 'PENDING',
+          referenceVoucherNo: rec.receiptNumber,
+          notes: `Customer Receipt ${rec.receiptNumber}${receiptNotes ? `: ${receiptNotes}` : ''}`
+        }).catch((err) => console.warn('Auto PDC save error:', err));
+      }
+
+      const pdcNotice = (receiptMode === 'CHEQUE' || receiptIsPdc) ? ' & PDC cheque registered in PDC module' : '';
+      const allocText = allocations.length > 0 ? ` & adjusted ${allocations.length} previous bill(s)` : '';
+      showToast('success', `Receipt ${rec.receiptNumber} recorded! Balance updated${allocText}${pdcNotice}.`);
+      setIsReceiptModalOpen(false);
+      setInvoiceAllocations({});
+    } catch (err: any) {
+      showToast('error', err?.message || 'Failed to record customer receipt.');
+    } finally {
+      setIsSubmittingReceipt(false);
+    }
   };
 
-  const handleCreatePayment = (e: React.FormEvent) => {
+  const handleCreatePayment = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!paymentSupplierId) {
       showToast('error', 'Select a supplier.');
@@ -417,44 +429,51 @@ export const Payments: React.FC<PaymentsProps> = ({
 
     const unallocated = Math.max(0, Number((amt - totalPaymentAllocated).toFixed(2)));
 
-    const pay = onCreatePayment({
-      date: new Date().toISOString().split('T')[0],
-      supplierId: paymentSupplierId,
-      supplierName: supp ? supp.name : 'Supplier',
-      amount: amt,
-      paymentMode: paymentMode,
-      referenceNo: paymentChequeNo || paymentRef,
-      bankName: paymentBankName,
-      notes: paymentNotes,
-      allocations: allocations.length > 0 ? allocations : undefined,
-      unallocatedAmount: unallocated > 0 ? unallocated : undefined
-    });
-
-    if (paymentMode === 'CHEQUE' || paymentIsPdc) {
-      const chqNum = paymentChequeNo || paymentRef || `CHQ-${pay.paymentNumber}`;
-      StorageService.savePdcAsync({
-        type: 'ISSUED',
-        partyId: paymentSupplierId,
-        partyType: 'SUPPLIER',
-        partyName: supp ? supp.name : 'Supplier',
-        chequeNumber: chqNum,
-        bankName: paymentBankName || 'Bank',
-        chequeDate: paymentChequeDate || new Date().toISOString().split('T')[0],
+    setIsSubmittingPayment(true);
+    try {
+      const pay = await onCreatePayment({
+        date: new Date().toISOString().split('T')[0],
+        supplierId: paymentSupplierId,
+        supplierName: supp ? supp.name : 'Supplier',
         amount: amt,
-        status: 'PENDING',
-        referenceVoucherNo: pay.paymentNumber,
-        notes: `Supplier Payment ${pay.paymentNumber}${paymentNotes ? `: ${paymentNotes}` : ''}`
-      }).catch((err) => console.warn('Auto PDC save error:', err));
-    }
+        paymentMode: paymentMode,
+        referenceNo: paymentChequeNo || paymentRef,
+        bankName: paymentBankName,
+        notes: paymentNotes,
+        allocations: allocations.length > 0 ? allocations : undefined,
+        unallocatedAmount: unallocated > 0 ? unallocated : undefined
+      });
 
-    const pdcNotice = (paymentMode === 'CHEQUE' || paymentIsPdc) ? ' & PDC cheque registered in PDC module' : '';
-    const allocText = allocations.length > 0 ? ` & adjusted ${allocations.length} previous bill(s)` : '';
-    showToast('success', `Payment ${pay.paymentNumber} recorded! Supplier payable updated${allocText}${pdcNotice}.`);
-    setIsPaymentModalOpen(false);
-    setBillAllocations({});
+      if (paymentMode === 'CHEQUE' || paymentIsPdc) {
+        const chqNum = paymentChequeNo || paymentRef || `CHQ-${pay.paymentNumber}`;
+        StorageService.savePdcAsync({
+          type: 'ISSUED',
+          partyId: paymentSupplierId,
+          partyType: 'SUPPLIER',
+          partyName: supp ? supp.name : 'Supplier',
+          chequeNumber: chqNum,
+          bankName: paymentBankName || 'Bank',
+          chequeDate: paymentChequeDate || new Date().toISOString().split('T')[0],
+          amount: amt,
+          status: 'PENDING',
+          referenceVoucherNo: pay.paymentNumber,
+          notes: `Supplier Payment ${pay.paymentNumber}${paymentNotes ? `: ${paymentNotes}` : ''}`
+        }).catch((err) => console.warn('Auto PDC save error:', err));
+      }
+
+      const pdcNotice = (paymentMode === 'CHEQUE' || paymentIsPdc) ? ' & PDC cheque registered in PDC module' : '';
+      const allocText = allocations.length > 0 ? ` & adjusted ${allocations.length} previous bill(s)` : '';
+      showToast('success', `Payment ${pay.paymentNumber} recorded! Supplier payable updated${allocText}${pdcNotice}.`);
+      setIsPaymentModalOpen(false);
+      setBillAllocations({});
+    } catch (err: any) {
+      showToast('error', err?.message || 'Failed to record supplier payment.');
+    } finally {
+      setIsSubmittingPayment(false);
+    }
   };
 
-  const handleCreateExpense = (e: React.FormEvent) => {
+  const handleCreateExpense = async (e: React.FormEvent) => {
     e.preventDefault();
     const amt = Number(expenseAmount);
     if (!amt || amt <= 0) {
@@ -462,17 +481,28 @@ export const Payments: React.FC<PaymentsProps> = ({
       return;
     }
 
-    const exp = onCreateExpense({
-      date: new Date().toISOString().split('T')[0],
-      category: expenseCategory,
-      amount: amt,
-      paidTo: expensePaidTo,
-      paymentMode: expenseMode,
-      notes: expenseNotes
-    });
+    setIsSubmittingExpense(true);
+    try {
+      const exp = await onCreateExpense({
+        date: new Date().toISOString().split('T')[0],
+        category: expenseCategory,
+        amount: amt,
+        paidTo: expensePaidTo,
+        paymentMode: expenseMode,
+        notes: expenseNotes
+      });
 
-    showToast('success', `Expense ${exp.expenseNumber} logged! Cash balance updated.`);
-    setIsExpenseModalOpen(false);
+      showToast('success', `Expense ${exp.expenseNumber || ''} logged! Cash balance updated.`);
+      setIsExpenseModalOpen(false);
+      setExpenseAmount('');
+      setExpensePaidTo('');
+      setExpenseNotes('');
+      setActiveTab('EXPENSES');
+    } catch (err: any) {
+      showToast('error', err?.message || 'Failed to record expense.');
+    } finally {
+      setIsSubmittingExpense(false);
+    }
   };
 
   return (
@@ -1642,16 +1672,25 @@ export const Payments: React.FC<PaymentsProps> = ({
               <div className="flex justify-end gap-3 pt-4 border-t border-slate-100">
                 <button
                   type="button"
+                  disabled={isSubmittingExpense}
                   onClick={() => setIsExpenseModalOpen(false)}
-                  className="px-4 py-2 font-bold text-sm text-slate-600"
+                  className="px-4 py-2 font-bold text-sm text-slate-600 disabled:opacity-50"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2 font-bold text-sm bg-rose-600 text-white rounded-xl"
+                  disabled={isSubmittingExpense}
+                  className="px-5 py-2 font-bold text-sm bg-rose-600 hover:bg-rose-700 active:scale-98 transition text-white rounded-xl disabled:opacity-50 flex items-center gap-2"
                 >
-                  Log Expense
+                  {isSubmittingExpense ? (
+                    <>
+                      <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
+                      <span>Saving...</span>
+                    </>
+                  ) : (
+                    <span>Log Expense</span>
+                  )}
                 </button>
               </div>
             </form>

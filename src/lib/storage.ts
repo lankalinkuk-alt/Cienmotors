@@ -1600,9 +1600,16 @@ export const StorageService = {
     }
 
     const targetCompId = expenseData.companyId || companyId || DEFAULT_COMPANY_ID;
-    const expNumber = expenseData.expenseNumber || "";
     const now = new Date().toISOString();
     const requestId = expenseData.requestId || generateUniqueRequestId('exp');
+
+    // Pre-calculate expense number if not provided
+    let expNumber = expenseData.expenseNumber;
+    if (!expNumber) {
+      const year = new Date().getFullYear();
+      const existingForComp = _inMemoryExpenses.filter((e) => (e.companyId || DEFAULT_COMPANY_ID) === targetCompId);
+      expNumber = `EXP-${year}-${String(existingForComp.length + 1).padStart(4, '0')}`;
+    }
 
     const newExpense: Expense = {
       ...expenseData,
@@ -1621,6 +1628,10 @@ export const StorageService = {
       };
     }
 
+    if (syncRes.expenseNumber) {
+      newExpense.expenseNumber = syncRes.expenseNumber;
+    }
+
     // Handle Idempotency / Duplicate
     if (syncRes.isDuplicate) {
       const existing = syncRes.existingData || newExpense;
@@ -1635,7 +1646,13 @@ export const StorageService = {
       };
     }
 
-    _inMemoryExpenses.unshift(newExpense);
+    // Remove any duplicate if in-memory had same id or requestId
+    const dupIdx = _inMemoryExpenses.findIndex((e) => e.id === newExpense.id || e.requestId === newExpense.requestId);
+    if (dupIdx !== -1) {
+      _inMemoryExpenses[dupIdx] = newExpense;
+    } else {
+      _inMemoryExpenses.unshift(newExpense);
+    }
 
     return {
       success: true,

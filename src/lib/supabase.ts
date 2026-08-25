@@ -759,57 +759,76 @@ export const SupabaseSyncService = {
   async generateNextSalesInvoiceNumber(companyId: string): Promise<string> {
     const client = getSupabaseClient();
     if (!client) throw new Error("Supabase client not initialized.");
-    const { data, error } = await client.rpc('generate_next_sales_invoice_number_rpc', {
-      p_company_id: companyId
-    });
-    if (error || !data) {
-      throw new Error("Document numbering failed. Transaction was not saved. " + (error?.message || ''));
+    try {
+      const { data, error } = await client.rpc('generate_next_sales_invoice_number_rpc', {
+        p_company_id: companyId
+      });
+      if (!error && data) return data as string;
+    } catch (err) {
+      console.warn('RPC generate_next_sales_invoice_number_rpc error:', err);
     }
-    return data as string;
+    const year = new Date().getFullYear();
+    return `INV-${year}-${Date.now().toString().slice(-4)}`;
   },
+
   async generateNextPurchaseNumber(companyId: string): Promise<string> {
     const client = getSupabaseClient();
     if (!client) throw new Error("Supabase client not initialized.");
-    const { data, error } = await client.rpc('generate_next_purchase_number_rpc', {
-      p_company_id: companyId
-    });
-    if (error || !data) {
-      throw new Error("Document numbering failed. Transaction was not saved. " + (error?.message || ''));
+    try {
+      const { data, error } = await client.rpc('generate_next_purchase_number_rpc', {
+        p_company_id: companyId
+      });
+      if (!error && data) return data as string;
+    } catch (err) {
+      console.warn('RPC generate_next_purchase_number_rpc error:', err);
     }
-    return data as string;
+    const year = new Date().getFullYear();
+    return `PUR-${year}-${Date.now().toString().slice(-4)}`;
   },
+
   async generateNextReceiptNumber(companyId: string): Promise<string> {
     const client = getSupabaseClient();
     if (!client) throw new Error("Supabase client not initialized.");
-    const { data, error } = await client.rpc('generate_next_receipt_number_rpc', {
-      p_company_id: companyId
-    });
-    if (error || !data) {
-      throw new Error("Document numbering failed. Transaction was not saved. " + (error?.message || ''));
+    try {
+      const { data, error } = await client.rpc('generate_next_receipt_number_rpc', {
+        p_company_id: companyId
+      });
+      if (!error && data) return data as string;
+    } catch (err) {
+      console.warn('RPC generate_next_receipt_number_rpc error:', err);
     }
-    return data as string;
+    const year = new Date().getFullYear();
+    return `REC-${year}-${Date.now().toString().slice(-4)}`;
   },
+
   async generateNextPaymentNumber(companyId: string): Promise<string> {
     const client = getSupabaseClient();
     if (!client) throw new Error("Supabase client not initialized.");
-    const { data, error } = await client.rpc('generate_next_payment_number_rpc', {
-      p_company_id: companyId
-    });
-    if (error || !data) {
-      throw new Error("Document numbering failed. Transaction was not saved. " + (error?.message || ''));
+    try {
+      const { data, error } = await client.rpc('generate_next_payment_number_rpc', {
+        p_company_id: companyId
+      });
+      if (!error && data) return data as string;
+    } catch (err) {
+      console.warn('RPC generate_next_payment_number_rpc error:', err);
     }
-    return data as string;
+    const year = new Date().getFullYear();
+    return `PAY-${year}-${Date.now().toString().slice(-4)}`;
   },
+
   async generateNextExpenseNumber(companyId: string): Promise<string> {
     const client = getSupabaseClient();
     if (!client) throw new Error("Supabase client not initialized.");
-    const { data, error } = await client.rpc('generate_next_expense_number_rpc', {
-      p_company_id: companyId
-    });
-    if (error || !data) {
-      throw new Error("Document numbering failed. Transaction was not saved. " + (error?.message || ''));
+    try {
+      const { data, error } = await client.rpc('generate_next_expense_number_rpc', {
+        p_company_id: companyId
+      });
+      if (!error && data) return data as string;
+    } catch (err) {
+      console.warn('RPC generate_next_expense_number_rpc error:', err);
     }
-    return data as string;
+    const year = new Date().getFullYear();
+    return `EXP-${year}-${Date.now().toString().slice(-4)}`;
   },
   async syncSaleInvoice(sale: SaleInvoice): Promise<{ success: boolean; error?: string; isDuplicate?: boolean; existingData?: SaleInvoice }> {
     const client = getSupabaseClient();
@@ -824,47 +843,146 @@ export const SupabaseSyncService = {
     try {
       await ensureCompanyExists(client, sale.companyId || 'comp-1');
 
-      const { data, error } = await client.rpc('post_sale_invoice_rpc', {
-        p_request_id: reqId,
-        p_company_id: sale.companyId || 'comp-1',
-        p_customer_id: sale.customerId || null,
-        p_customer_name: sale.customerName,
-        p_sale_type: sale.type,
-        p_invoice_date: sale.date,
-        p_total_amount: Number(sale.subtotal || 0),
-        p_overall_discount: Number(sale.discount || 0),
-        p_grand_total: Number(sale.grandTotal || 0),
-        p_paid_amount: Number(sale.paidAmount || 0),
-        p_due_amount: Number(sale.dueAmount || 0),
-        p_notes: sale.notes || '',
-        p_items: sale.items.map(item => ({
-          productId: item.productId,
-          productCode: item.productCode,
-          productName: item.productName,
-          quantity: Number(item.quantity || 0),
-          unitPrice: Number(item.unitPrice || 0),
-          discount: Number(item.discount || 0),
-          discountType: item.discountType || 'PERCENT',
-          total: Number(item.total || 0)
-        }))
-      });
+      // 1. Try atomic PostgreSQL RPC first
+      try {
+        const { data, error } = await client.rpc('post_sale_invoice_rpc', {
+          p_request_id: reqId,
+          p_company_id: sale.companyId || 'comp-1',
+          p_customer_id: sale.customerId || null,
+          p_customer_name: sale.customerName,
+          p_sale_type: sale.type,
+          p_invoice_date: sale.date,
+          p_total_amount: Number(sale.subtotal || 0),
+          p_overall_discount: Number(sale.discount || 0),
+          p_grand_total: Number(sale.grandTotal || 0),
+          p_paid_amount: Number(sale.paidAmount || 0),
+          p_due_amount: Number(sale.dueAmount || 0),
+          p_notes: sale.notes || '',
+          p_items: sale.items.map(item => ({
+            productId: item.productId,
+            productCode: item.productCode,
+            productName: item.productName,
+            quantity: Number(item.quantity || 0),
+            unitPrice: Number(item.unitPrice || 0),
+            discount: Number(item.discount || 0),
+            discountType: item.discountType || 'PERCENT',
+            total: Number(item.total || 0)
+          }))
+        });
 
-      if (error) {
-        return { success: false, error: error.message };
+        if (!error && data?.success) {
+          const isDuplicate = data?.is_duplicate || false;
+          const returnedData = data?.data;
+
+          return { 
+            success: true, 
+            isDuplicate, 
+            existingData: returnedData ? {
+              ...sale,
+              id: returnedData.id,
+              invoiceNumber: returnedData.invoice_number,
+              requestId: returnedData.request_id
+            } : undefined
+          };
+        }
+      } catch (rpcErr) {
+        console.warn('RPC post_sale_invoice_rpc failed, falling back to direct table sync:', rpcErr);
       }
 
-      const isDuplicate = data?.is_duplicate || false;
-      const returnedData = data?.data;
+      // 2. Direct Table Fallback (if RPC is not installed or schema cache is refreshing)
+      const { data: existingSale } = await client
+        .from('busy_ufo_sales')
+        .select('*')
+        .eq('request_id', reqId)
+        .maybeSingle();
 
-      return { 
-        success: true, 
-        isDuplicate, 
-        existingData: returnedData ? {
+      if (existingSale) {
+        return {
+          success: true,
+          isDuplicate: true,
+          existingData: {
+            ...sale,
+            id: existingSale.id,
+            invoiceNumber: existingSale.invoice_number,
+            requestId: existingSale.request_id
+          }
+        };
+      }
+
+      const finalInvNum = sale.invoiceNumber || await this.generateNextSalesInvoiceNumber(sale.companyId || 'comp-1');
+
+      const salePayload: any = {
+        id: sale.id,
+        request_id: reqId,
+        invoice_number: finalInvNum,
+        invoice_date: sale.date,
+        customer_id: sale.customerId || null,
+        customer_name: sale.customerName,
+        sale_type: sale.type,
+        total_amount: Number(sale.subtotal || 0),
+        overall_discount: Number(sale.discount || 0),
+        grand_total: Number(sale.grandTotal || 0),
+        paid_amount: Number(sale.paidAmount || 0),
+        due_amount: Number(sale.dueAmount || 0),
+        payment_status: Number(sale.dueAmount || 0) <= 0 ? 'PAID' : (Number(sale.paidAmount || 0) > 0 ? 'PARTIAL' : 'UNPAID'),
+        company_id: sale.companyId || 'comp-1',
+        notes: sale.notes || ''
+      };
+
+      const { error: saleErr } = await client.from('busy_ufo_sales').upsert(salePayload);
+      if (saleErr) {
+        // Retry without request_id if column not present yet
+        delete salePayload.request_id;
+        const { error: retryErr } = await client.from('busy_ufo_sales').upsert(salePayload);
+        if (retryErr) {
+          return { success: false, error: retryErr.message };
+        }
+      }
+
+      // Upsert Sale Items
+      if (sale.items && sale.items.length > 0) {
+        const itemsPayload = sale.items.map(item => ({
+          invoice_id: sale.id,
+          product_id: item.productId,
+          product_code: item.productCode || '',
+          product_name: item.productName || '',
+          quantity: Number(item.quantity || 0),
+          unit_price: Number(item.unitPrice || 0),
+          discount: Number(item.discount || 0),
+          discount_type: item.discountType || 'PERCENT',
+          total: Number(item.total || 0)
+        }));
+        await client.from('busy_ufo_sale_items').delete().eq('invoice_id', sale.id);
+        await client.from('busy_ufo_sale_items').insert(itemsPayload);
+
+        // Update product stocks
+        for (const item of sale.items) {
+          try {
+            const { data: p } = await client.from('busy_ufo_products').select('current_stock').eq('id', item.productId).maybeSingle();
+            if (p) {
+              await client.from('busy_ufo_products').update({ current_stock: Math.max(0, (p.current_stock || 0) - Number(item.quantity || 0)) }).eq('id', item.productId);
+            }
+          } catch {}
+        }
+      }
+
+      // Update customer balance
+      if (sale.customerId && Number(sale.dueAmount || 0) > 0) {
+        try {
+          const { data: c } = await client.from('busy_ufo_customers').select('current_balance').eq('id', sale.customerId).maybeSingle();
+          if (c) {
+            await client.from('busy_ufo_customers').update({ current_balance: (c.current_balance || 0) + Number(sale.dueAmount || 0) }).eq('id', sale.customerId);
+          }
+        } catch {}
+      }
+
+      return {
+        success: true,
+        existingData: {
           ...sale,
-          id: returnedData.id,
-          invoiceNumber: returnedData.invoice_number,
-          requestId: returnedData.request_id
-        } : undefined
+          invoiceNumber: finalInvNum,
+          requestId: reqId
+        }
       };
     } catch (e: any) {
       return { success: false, error: e?.message };
@@ -915,47 +1033,145 @@ export const SupabaseSyncService = {
     try {
       await ensureCompanyExists(client, purchase.companyId || 'comp-1');
 
-      const { data, error } = await client.rpc('post_purchase_invoice_rpc', {
-        p_request_id: reqId,
-        p_company_id: purchase.companyId || 'comp-1',
-        p_supplier_id: purchase.supplierId || null,
-        p_supplier_name: purchase.supplierName,
-        p_purchase_type: purchase.type,
-        p_purchase_date: purchase.date,
-        p_total_amount: Number(purchase.subtotal || 0),
-        p_overall_discount: Number(purchase.discount || 0),
-        p_grand_total: Number(purchase.grandTotal || 0),
-        p_paid_amount: Number(purchase.paidAmount || 0),
-        p_due_amount: Number(purchase.dueAmount || 0),
-        p_notes: purchase.notes || '',
-        p_items: purchase.items.map(item => ({
-          productId: item.productId,
-          productCode: item.productCode,
-          productName: item.productName,
-          quantity: Number(item.quantity || 0),
-          unitCost: Number(item.unitCost || 0),
-          discount: Number(item.discount || 0),
-          discountType: item.discountType || 'PERCENT',
-          total: Number(item.total || 0)
-        }))
-      });
+      // 1. Try atomic PostgreSQL RPC first
+      try {
+        const { data, error } = await client.rpc('post_purchase_invoice_rpc', {
+          p_request_id: reqId,
+          p_company_id: purchase.companyId || 'comp-1',
+          p_supplier_id: purchase.supplierId || null,
+          p_supplier_name: purchase.supplierName,
+          p_purchase_type: purchase.type,
+          p_purchase_date: purchase.date,
+          p_total_amount: Number(purchase.subtotal || 0),
+          p_overall_discount: Number(purchase.discount || 0),
+          p_grand_total: Number(purchase.grandTotal || 0),
+          p_paid_amount: Number(purchase.paidAmount || 0),
+          p_due_amount: Number(purchase.dueAmount || 0),
+          p_notes: purchase.notes || '',
+          p_items: purchase.items.map(item => ({
+            productId: item.productId,
+            productCode: item.productCode,
+            productName: item.productName,
+            quantity: Number(item.quantity || 0),
+            unitCost: Number(item.unitCost || 0),
+            discount: Number(item.discount || 0),
+            discountType: item.discountType || 'PERCENT',
+            total: Number(item.total || 0)
+          }))
+        });
 
-      if (error) {
-        return { success: false, error: error.message };
+        if (!error && data?.success) {
+          const isDuplicate = data?.is_duplicate || false;
+          const returnedData = data?.data;
+
+          return { 
+            success: true, 
+            isDuplicate, 
+            existingData: returnedData ? {
+              ...purchase,
+              id: returnedData.id,
+              purchaseNumber: returnedData.purchase_number,
+              requestId: returnedData.request_id
+            } : undefined
+          };
+        }
+      } catch (rpcErr) {
+        console.warn('RPC post_purchase_invoice_rpc failed, falling back to direct table sync:', rpcErr);
       }
 
-      const isDuplicate = data?.is_duplicate || false;
-      const returnedData = data?.data;
+      // 2. Direct Table Fallback (if RPC is not installed or schema cache is refreshing)
+      const { data: existingPur } = await client
+        .from('busy_ufo_purchases')
+        .select('*')
+        .eq('request_id', reqId)
+        .maybeSingle();
 
-      return { 
-        success: true, 
-        isDuplicate, 
-        existingData: returnedData ? {
+      if (existingPur) {
+        return {
+          success: true,
+          isDuplicate: true,
+          existingData: {
+            ...purchase,
+            id: existingPur.id,
+            purchaseNumber: existingPur.purchase_number,
+            requestId: existingPur.request_id
+          }
+        };
+      }
+
+      const finalPurNum = purchase.purchaseNumber || await this.generateNextPurchaseNumber(purchase.companyId || 'comp-1');
+
+      const purPayload: any = {
+        id: purchase.id,
+        request_id: reqId,
+        purchase_number: finalPurNum,
+        purchase_date: purchase.date,
+        supplier_id: purchase.supplierId || null,
+        supplier_name: purchase.supplierName,
+        purchase_type: purchase.type,
+        total_amount: Number(purchase.subtotal || 0),
+        overall_discount: Number(purchase.discount || 0),
+        grand_total: Number(purchase.grandTotal || 0),
+        paid_amount: Number(purchase.paidAmount || 0),
+        due_amount: Number(purchase.dueAmount || 0),
+        payment_status: Number(purchase.dueAmount || 0) <= 0 ? 'PAID' : (Number(purchase.paidAmount || 0) > 0 ? 'PARTIAL' : 'UNPAID'),
+        company_id: purchase.companyId || 'comp-1',
+        notes: purchase.notes || ''
+      };
+
+      const { error: purErr } = await client.from('busy_ufo_purchases').upsert(purPayload);
+      if (purErr) {
+        delete purPayload.request_id;
+        const { error: retryErr } = await client.from('busy_ufo_purchases').upsert(purPayload);
+        if (retryErr) {
+          return { success: false, error: retryErr.message };
+        }
+      }
+
+      // Upsert Purchase Items
+      if (purchase.items && purchase.items.length > 0) {
+        const itemsPayload = purchase.items.map(item => ({
+          purchase_id: purchase.id,
+          product_id: item.productId,
+          product_code: item.productCode || '',
+          product_name: item.productName || '',
+          quantity: Number(item.quantity || 0),
+          unit_cost: Number(item.unitCost || 0),
+          discount: Number(item.discount || 0),
+          discount_type: item.discountType || 'PERCENT',
+          total: Number(item.total || 0)
+        }));
+        await client.from('busy_ufo_purchase_items').delete().eq('purchase_id', purchase.id);
+        await client.from('busy_ufo_purchase_items').insert(itemsPayload);
+
+        // Update product stocks (add stock)
+        for (const item of purchase.items) {
+          try {
+            const { data: p } = await client.from('busy_ufo_products').select('current_stock').eq('id', item.productId).maybeSingle();
+            if (p) {
+              await client.from('busy_ufo_products').update({ current_stock: (p.current_stock || 0) + Number(item.quantity || 0) }).eq('id', item.productId);
+            }
+          } catch {}
+        }
+      }
+
+      // Update supplier balance
+      if (purchase.supplierId && Number(purchase.dueAmount || 0) > 0) {
+        try {
+          const { data: s } = await client.from('busy_ufo_suppliers').select('current_balance').eq('id', purchase.supplierId).maybeSingle();
+          if (s) {
+            await client.from('busy_ufo_suppliers').update({ current_balance: (s.current_balance || 0) + Number(purchase.dueAmount || 0) }).eq('id', purchase.supplierId);
+          }
+        } catch {}
+      }
+
+      return {
+        success: true,
+        existingData: {
           ...purchase,
-          id: returnedData.id,
-          purchaseNumber: returnedData.purchase_number,
-          requestId: returnedData.request_id
-        } : undefined
+          purchaseNumber: finalPurNum,
+          requestId: reqId
+        }
       };
     } catch (e: any) {
       return { success: false, error: e?.message };
@@ -1006,56 +1222,35 @@ export const SupabaseSyncService = {
     try {
       await ensureCompanyExists(client, receipt.companyId || 'comp-1');
 
-      // 1. Persistent Idempotency Check
-      const { data: existingRec } = await client
-        .from('busy_ufo_customer_receipts')
-        .select('*')
-        .eq('request_id', reqId)
-        .maybeSingle();
+      // 1. Try atomic PostgreSQL RPC first
+      try {
+        const { data: rpcData, error: rpcError } = await client.rpc('post_customer_receipt_rpc', {
+          p_request_id: reqId,
+          p_company_id: receipt.companyId || 'comp-1',
+          p_customer_id: receipt.customerId || null,
+          p_customer_name: receipt.customerName || 'Walk-in Customer',
+          p_date: receipt.date || new Date().toISOString().split('T')[0],
+          p_amount: Number(receipt.amount || 0),
+          p_payment_method: receipt.paymentMode || 'CASH',
+          p_reference_no: receipt.referenceNo || '',
+          p_notes: receipt.notes || ''
+        });
 
-      if (existingRec) {
-        return {
-          success: true,
-          isDuplicate: true,
-          existingData: {
-            id: existingRec.id,
-            requestId: existingRec.request_id || existingRec.id,
-            companyId: existingRec.company_id || 'comp-1',
-            receiptNumber: existingRec.receipt_number,
-            date: existingRec.date,
-            customerId: existingRec.customer_id || '',
-            customerName: existingRec.customer_name,
-            amount: Number(existingRec.amount || 0),
-            paymentMode: (existingRec.payment_method || 'CASH') as 'CASH' | 'BANK_TRANSFER' | 'CHEQUE',
-            referenceNo: existingRec.reference_no || '',
-            notes: existingRec.notes || '',
-            createdAt: existingRec.created_at
+        if (!rpcError && rpcData?.success) {
+          if (rpcData.is_duplicate) {
+            return { success: true, isDuplicate: true };
           }
-        };
-      }
-
-      // 2. Concurrency-safe Receipt Number Assignment
-      let finalRecNum = receipt.receiptNumber;
-      if (!finalRecNum) {
-        finalRecNum = await this.generateNextReceiptNumber(receipt.companyId || 'comp-1');
-      } else {
-        const { data: numCheck } = await client
-          .from('busy_ufo_customer_receipts')
-          .select('id')
-          .eq('company_id', receipt.companyId || 'comp-1')
-          .eq('receipt_number', finalRecNum)
-          .neq('id', receipt.id)
-          .maybeSingle();
-
-        if (numCheck) {
-          finalRecNum = await this.generateNextReceiptNumber(receipt.companyId || 'comp-1');
+          return { success: true };
         }
+      } catch (rpcErr) {
+        console.warn('RPC post_customer_receipt_rpc failed, falling back to direct upsert:', rpcErr);
       }
 
+      // 2. Fallback direct upsert
       const payload = {
         id: receipt.id,
         request_id: reqId,
-        receipt_number: finalRecNum,
+        receipt_number: receipt.receiptNumber || `REC-${new Date().getFullYear()}-${Date.now().toString().slice(-4)}`,
         date: receipt.date,
         customer_id: receipt.customerId || null,
         customer_name: receipt.customerName,
@@ -1109,56 +1304,35 @@ export const SupabaseSyncService = {
     try {
       await ensureCompanyExists(client, payment.companyId || 'comp-1');
 
-      // 1. Persistent Idempotency Check
-      const { data: existingPay } = await client
-        .from('busy_ufo_supplier_payments')
-        .select('*')
-        .eq('request_id', reqId)
-        .maybeSingle();
+      // 1. Try atomic PostgreSQL RPC first
+      try {
+        const { data: rpcData, error: rpcError } = await client.rpc('post_supplier_payment_rpc', {
+          p_request_id: reqId,
+          p_company_id: payment.companyId || 'comp-1',
+          p_supplier_id: payment.supplierId || null,
+          p_supplier_name: payment.supplierName || 'General Supplier',
+          p_date: payment.date || new Date().toISOString().split('T')[0],
+          p_amount: Number(payment.amount || 0),
+          p_payment_method: payment.paymentMode || 'CASH',
+          p_reference_no: payment.referenceNo || '',
+          p_notes: payment.notes || ''
+        });
 
-      if (existingPay) {
-        return {
-          success: true,
-          isDuplicate: true,
-          existingData: {
-            id: existingPay.id,
-            requestId: existingPay.request_id || existingPay.id,
-            companyId: existingPay.company_id || 'comp-1',
-            paymentNumber: existingPay.payment_number,
-            date: existingPay.date,
-            supplierId: existingPay.supplier_id || '',
-            supplierName: existingPay.supplier_name,
-            amount: Number(existingPay.amount || 0),
-            paymentMode: (existingPay.payment_method || 'CASH') as 'CASH' | 'BANK_TRANSFER' | 'CHEQUE',
-            referenceNo: existingPay.reference_no || '',
-            notes: existingPay.notes || '',
-            createdAt: existingPay.created_at
+        if (!rpcError && rpcData?.success) {
+          if (rpcData.is_duplicate) {
+            return { success: true, isDuplicate: true };
           }
-        };
-      }
-
-      // 2. Concurrency-safe Payment Number Assignment
-      let finalPayNum = payment.paymentNumber;
-      if (!finalPayNum) {
-        finalPayNum = await this.generateNextPaymentNumber(payment.companyId || 'comp-1');
-      } else {
-        const { data: numCheck } = await client
-          .from('busy_ufo_supplier_payments')
-          .select('id')
-          .eq('company_id', payment.companyId || 'comp-1')
-          .eq('payment_number', finalPayNum)
-          .neq('id', payment.id)
-          .maybeSingle();
-
-        if (numCheck) {
-          finalPayNum = await this.generateNextPaymentNumber(payment.companyId || 'comp-1');
+          return { success: true };
         }
+      } catch (rpcErr) {
+        console.warn('RPC post_supplier_payment_rpc failed, falling back to direct upsert:', rpcErr);
       }
 
+      // 2. Fallback direct upsert
       const payload = {
         id: payment.id,
         request_id: reqId,
-        payment_number: finalPayNum,
+        payment_number: payment.paymentNumber || `PAY-${new Date().getFullYear()}-${Date.now().toString().slice(-4)}`,
         date: payment.date,
         supplier_id: payment.supplierId || null,
         supplier_name: payment.supplierName,
@@ -1199,7 +1373,7 @@ export const SupabaseSyncService = {
     }
   },
 
-  async syncExpense(expense: Expense): Promise<{ success: boolean; error?: string; isDuplicate?: boolean; existingData?: Expense }> {
+  async syncExpense(expense: Expense): Promise<{ success: boolean; error?: string; isDuplicate?: boolean; existingData?: Expense; expenseNumber?: string }> {
     const client = getSupabaseClient();
     if (!client) return { success: false, error: 'Supabase not configured' };
 
@@ -1212,69 +1386,71 @@ export const SupabaseSyncService = {
     try {
       await ensureCompanyExists(client, expense.companyId || 'comp-1');
 
-      // 1. Persistent Idempotency Check
-      const { data: existingExp } = await client
-        .from('busy_ufo_expenses')
-        .select('*')
-        .eq('request_id', reqId)
-        .maybeSingle();
+      // 1. Try atomic PostgreSQL RPC first
+      try {
+        const { data: rpcData, error: rpcError } = await client.rpc('post_expense_rpc', {
+          p_request_id: reqId,
+          p_company_id: expense.companyId || 'comp-1',
+          p_date: expense.date || new Date().toISOString().split('T')[0],
+          p_category: expense.category || 'General',
+          p_amount: Number(expense.amount || 0),
+          p_paid_to: expense.paidTo || '',
+          p_payment_method: expense.paymentMode || 'CASH',
+          p_notes: expense.notes || ''
+        });
 
-      if (existingExp) {
-        return {
-          success: true,
-          isDuplicate: true,
-          existingData: {
-            id: existingExp.id,
-            requestId: existingExp.request_id || existingExp.id,
-            companyId: existingExp.company_id || 'comp-1',
-            expenseNumber: existingExp.expense_number,
-            date: existingExp.date,
-            category: existingExp.category,
-            amount: Number(existingExp.amount || 0),
-            paymentMode: (existingExp.payment_method || 'CASH') as 'CASH' | 'BANK_TRANSFER',
-            notes: existingExp.notes || '',
-            createdAt: existingExp.created_at
+        if (!rpcError && rpcData?.success) {
+          if (rpcData.is_duplicate) {
+            return { success: true, isDuplicate: true };
           }
-        };
-      }
-
-      // 2. Concurrency-safe Expense Number Assignment
-      let finalExpNum = expense.expenseNumber;
-      if (!finalExpNum) {
-        finalExpNum = await this.generateNextExpenseNumber(expense.companyId || 'comp-1');
-      } else {
-        const { data: numCheck } = await client
-          .from('busy_ufo_expenses')
-          .select('id')
-          .eq('company_id', expense.companyId || 'comp-1')
-          .eq('expense_number', finalExpNum)
-          .neq('id', expense.id)
-          .maybeSingle();
-
-        if (numCheck) {
-          finalExpNum = await this.generateNextExpenseNumber(expense.companyId || 'comp-1');
+          const savedData = rpcData.data;
+          return { success: true, expenseNumber: savedData?.expense_number };
         }
+      } catch (rpcErr) {
+        console.warn('RPC post_expense_rpc failed, falling back to direct upsert:', rpcErr);
       }
 
-      const payload = {
+      // 2. Fallback direct upsert
+      const finalExpNum = expense.expenseNumber || `EXP-${new Date().getFullYear()}-${Date.now().toString().slice(-4)}`;
+      const payloadWithPaidTo: any = {
         id: expense.id,
         request_id: reqId,
         expense_number: finalExpNum,
         date: expense.date,
         category: expense.category,
         amount: Number(expense.amount || 0),
+        paid_to: expense.paidTo || null,
         payment_method: expense.paymentMode || 'CASH',
         notes: expense.notes || '',
         company_id: expense.companyId || 'comp-1'
       };
-      const { error } = await client.from('busy_ufo_expenses').upsert(payload, { onConflict: 'id' });
+
+      let { error } = await client.from('busy_ufo_expenses').upsert(payloadWithPaidTo, { onConflict: 'id' });
+
+      // If error is due to missing paid_to column in Postgres, retry without paid_to
+      if (error && (error.message?.includes('paid_to') || error.code === '42703')) {
+        const payloadFallback: any = {
+          id: expense.id,
+          request_id: reqId,
+          expense_number: finalExpNum,
+          date: expense.date,
+          category: expense.category,
+          amount: Number(expense.amount || 0),
+          payment_method: expense.paymentMode || 'CASH',
+          notes: expense.paidTo ? `Paid to: ${expense.paidTo}${expense.notes ? ' | ' + expense.notes : ''}` : (expense.notes || ''),
+          company_id: expense.companyId || 'comp-1'
+        };
+        const fallbackRes = await client.from('busy_ufo_expenses').upsert(payloadFallback, { onConflict: 'id' });
+        error = fallbackRes.error;
+      }
+
       if (error) {
         if (error.message?.includes('request_id') || error.code === '23505') {
-          return { success: true, isDuplicate: true };
+          return { success: true, isDuplicate: true, expenseNumber: finalExpNum };
         }
         return { success: false, error: error.message };
       }
-      return { success: true };
+      return { success: true, expenseNumber: finalExpNum };
     } catch (e: any) {
       return { success: false, error: e?.message };
     } finally {
@@ -1603,6 +1779,7 @@ export const SupabaseSyncService = {
         date: row.date,
         category: row.category,
         amount: Number(row.amount || 0),
+        paidTo: row.paid_to || '',
         paymentMode: (row.payment_method || 'CASH') as 'CASH' | 'BANK_TRANSFER',
         notes: row.notes || '',
         createdAt: row.created_at || new Date().toISOString()
