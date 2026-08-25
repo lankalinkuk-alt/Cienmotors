@@ -754,8 +754,8 @@ export const AuthService = {
     }
 
     const assignedCompanies = this.getUserAssignedCompanies(user);
-    let activeCompany = session.company;
-    if (!activeCompany || !assignedCompanies.some((c) => c.id === activeCompany.id)) {
+    let activeCompany = assignedCompanies.find((c) => c.id === session.company?.id);
+    if (!activeCompany) {
       activeCompany = assignedCompanies[0];
     }
 

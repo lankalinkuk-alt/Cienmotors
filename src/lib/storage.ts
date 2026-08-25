@@ -870,23 +870,11 @@ export const StorageService = {
     message?: string;
     error?: string;
   }> {
-    if (!checkOnline()) {
-      return {
-        success: false,
-        error: 'Internet connection is required. The invoice was not saved.'
-      };
-    }
-
+    if (!checkOnline()) return { success: false, error: 'Internet connection is required. The invoice was not saved.' };
     const creds = getActiveSupabaseCredentials();
-    if (!creds.url || !creds.key) {
-      return {
-        success: false,
-        error: 'Supabase database is not configured. Please configure database credentials in Settings.'
-      };
-    }
+    if (!creds.url || !creds.key) return { success: false, error: 'Supabase database is not configured.' };
 
     const targetCompId = invoiceData.companyId || companyId || DEFAULT_COMPANY_ID;
-    const invNumber = invoiceData.invoiceNumber || await SupabaseSyncService.generateNextSalesInvoiceNumber(targetCompId);
     const now = new Date().toISOString();
     const requestId = invoiceData.requestId || generateUniqueRequestId('sale');
 
@@ -895,35 +883,27 @@ export const StorageService = {
       requestId,
       companyId: targetCompId,
       id: invoiceData.id || `sale-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
-      invoiceNumber: invNumber,
+      invoiceNumber: invoiceData.invoiceNumber || '',
       createdAt: now,
       updatedAt: now
     };
 
     const syncRes = await SupabaseSyncService.syncSaleInvoice(newSale);
     if (!syncRes.success) {
-      return {
-        success: false,
-        error: syncRes.error || 'Failed to save sale invoice to Supabase database.'
-      };
+      return { success: false, error: syncRes.error || 'Failed to save sale invoice to Supabase database.' };
     }
 
-    // Handle Idempotency / Duplicate
+    const finalSale = syncRes.existingData || newSale;
+
     if (syncRes.isDuplicate) {
-      const existing = syncRes.existingData || newSale;
-      const existsInMemory = _inMemorySales.some((s) => s.id === existing.id || s.requestId === existing.requestId);
+      const existsInMemory = _inMemorySales.some((s) => s.id === finalSale.id || s.requestId === finalSale.requestId);
       if (!existsInMemory) {
-        _inMemorySales.unshift(existing);
+        _inMemorySales.unshift(finalSale);
       }
-      return {
-        success: true,
-        data: existing,
-        message: `Invoice ${existing.invoiceNumber} was already recorded and verified in database.`
-      };
+      return { success: true, data: finalSale, message: `Invoice ${finalSale.invoiceNumber} was already recorded.` };
     }
 
-    // On new Supabase success, update in-memory products (deduct stock) and customer outstanding
-    for (const item of newSale.items) {
+    for (const item of finalSale.items) {
       const pIdx = _inMemoryProducts.findIndex((p) => p.id === item.productId);
       if (pIdx !== -1) {
         _inMemoryProducts[pIdx] = {
@@ -934,28 +914,20 @@ export const StorageService = {
       }
     }
 
-    if (newSale.customerId && newSale.dueAmount > 0) {
-      const cIdx = _inMemoryCustomers.findIndex(
-        (c) => c.id === newSale.customerId && (c.companyId || DEFAULT_COMPANY_ID) === targetCompId
-      );
+    if (finalSale.customerId && finalSale.dueAmount > 0) {
+      const cIdx = _inMemoryCustomers.findIndex(c => c.id === finalSale.customerId && (c.companyId || DEFAULT_COMPANY_ID) === targetCompId);
       if (cIdx !== -1) {
         _inMemoryCustomers[cIdx] = {
           ..._inMemoryCustomers[cIdx],
-          outstandingBalance: Number(_inMemoryCustomers[cIdx].outstandingBalance || 0) + Number(newSale.dueAmount),
+          outstandingBalance: Number(_inMemoryCustomers[cIdx].outstandingBalance || 0) + Number(finalSale.dueAmount),
           updatedAt: now
         };
       }
     }
 
-    _inMemorySales.unshift(newSale);
-
-    return {
-      success: true,
-      data: newSale,
-      message: `Invoice ${newSale.invoiceNumber} recorded and verified in database.`
-    };
+    _inMemorySales.unshift(finalSale);
+    return { success: true, data: finalSale };
   },
-
   async updateSaleInvoiceAsync(
     id: string,
     invoiceData: Partial<SaleInvoice>,
@@ -1107,92 +1079,64 @@ export const StorageService = {
     message?: string;
     error?: string;
   }> {
-    if (!checkOnline()) {
-      return {
-        success: false,
-        error: 'Internet connection is required. The purchase bill was not saved.'
-      };
-    }
-
+    if (!checkOnline()) return { success: false, error: 'Internet connection is required.' };
     const creds = getActiveSupabaseCredentials();
-    if (!creds.url || !creds.key) {
-      return {
-        success: false,
-        error: 'Supabase database is not configured. Please configure database credentials in Settings.'
-      };
-    }
+    if (!creds.url || !creds.key) return { success: false, error: 'Supabase database is not configured.' };
 
     const targetCompId = purchaseData.companyId || companyId || DEFAULT_COMPANY_ID;
-    const purNumber = purchaseData.purchaseNumber || await SupabaseSyncService.generateNextPurchaseNumber(targetCompId);
     const now = new Date().toISOString();
-    const requestId = purchaseData.requestId || generateUniqueRequestId('pur');
+    const requestId = purchaseData.requestId || generateUniqueRequestId('purchase');
 
-    const newPurchase: PurchaseInvoice = {
+    const newPur: PurchaseInvoice = {
       ...purchaseData,
       requestId,
       companyId: targetCompId,
       id: purchaseData.id || `pur-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
-      purchaseNumber: purNumber,
+      purchaseNumber: purchaseData.purchaseNumber || '',
       createdAt: now,
       updatedAt: now
     };
 
-    const syncRes = await SupabaseSyncService.syncPurchaseInvoice(newPurchase);
+    const syncRes = await SupabaseSyncService.syncPurchaseInvoice(newPur);
     if (!syncRes.success) {
-      return {
-        success: false,
-        error: syncRes.error || 'Failed to record purchase bill in database.'
-      };
+      return { success: false, error: syncRes.error || 'Failed to save purchase to database.' };
     }
 
-    // Handle Idempotency / Duplicate
+    const finalPur = syncRes.existingData || newPur;
+
     if (syncRes.isDuplicate) {
-      const existing = syncRes.existingData || newPurchase;
-      const existsInMemory = _inMemoryPurchases.some((p) => p.id === existing.id || p.requestId === existing.requestId);
+      const existsInMemory = _inMemoryPurchases.some((s) => s.id === finalPur.id || s.requestId === finalPur.requestId);
       if (!existsInMemory) {
-        _inMemoryPurchases.unshift(existing);
+        _inMemoryPurchases.unshift(finalPur);
       }
-      return {
-        success: true,
-        data: existing,
-        message: `Purchase bill ${existing.purchaseNumber} was already recorded and verified in database.`
-      };
+      return { success: true, data: finalPur, message: `Purchase ${finalPur.purchaseNumber} was already recorded.` };
     }
 
-    // Update in-memory product stock and cost prices
-    for (const item of newPurchase.items) {
-      let pIndex = _inMemoryProducts.findIndex((p) => p.id === item.productId);
-      if (pIndex !== -1) {
-        _inMemoryProducts[pIndex] = {
-          ..._inMemoryProducts[pIndex],
-          currentStock: Number(_inMemoryProducts[pIndex].currentStock || 0) + Number(item.quantity || 0),
-          costPrice: Number(item.unitCost) > 0 ? Number(item.unitCost) : _inMemoryProducts[pIndex].costPrice,
+    for (const item of finalPur.items) {
+      const pIdx = _inMemoryProducts.findIndex((p) => p.id === item.productId);
+      if (pIdx !== -1) {
+        _inMemoryProducts[pIdx] = {
+          ..._inMemoryProducts[pIdx],
+          currentStock: Number(_inMemoryProducts[pIdx].currentStock || 0) + Number(item.quantity || 0),
           updatedAt: now
         };
       }
     }
 
-    // Update supplier payable
-    if (newPurchase.supplierId && newPurchase.dueAmount > 0) {
-      const sIndex = _inMemorySuppliers.findIndex((s) => s.id === newPurchase.supplierId);
-      if (sIndex !== -1) {
-        _inMemorySuppliers[sIndex] = {
-          ..._inMemorySuppliers[sIndex],
-          payableBalance: Number(_inMemorySuppliers[sIndex].payableBalance || 0) + Number(newPurchase.dueAmount),
+    if (finalPur.supplierId && finalPur.dueAmount > 0) {
+      const sIdx = _inMemorySuppliers.findIndex(s => s.id === finalPur.supplierId && (s.companyId || DEFAULT_COMPANY_ID) === targetCompId);
+      if (sIdx !== -1) {
+        _inMemorySuppliers[sIdx] = {
+          ..._inMemorySuppliers[sIdx],
+          payableBalance: Number(_inMemorySuppliers[sIdx].payableBalance || 0) + Number(finalPur.dueAmount),
           updatedAt: now
         };
       }
     }
 
-    _inMemoryPurchases.unshift(newPurchase);
-
-    return {
-      success: true,
-      data: newPurchase,
-      message: `Purchase bill ${newPurchase.purchaseNumber} recorded and verified in database.`
-    };
+    _inMemoryPurchases.unshift(finalPur);
+    return { success: true, data: finalPur };
   },
-
   async updatePurchaseInvoiceAsync(
     id: string,
     purchaseData: Partial<PurchaseInvoice>,
@@ -1358,7 +1302,7 @@ export const StorageService = {
     }
 
     const targetCompId = receiptData.companyId || companyId || DEFAULT_COMPANY_ID;
-    const recNumber = receiptData.receiptNumber || await SupabaseSyncService.generateNextReceiptNumber(targetCompId);
+    const recNumber = receiptData.receiptNumber || "";
     const now = new Date().toISOString();
     const requestId = receiptData.requestId || generateUniqueRequestId('rec');
 
@@ -1507,7 +1451,7 @@ export const StorageService = {
     }
 
     const targetCompId = paymentData.companyId || companyId || DEFAULT_COMPANY_ID;
-    const payNumber = paymentData.paymentNumber || await SupabaseSyncService.generateNextPaymentNumber(targetCompId);
+    const payNumber = paymentData.paymentNumber || "";
     const now = new Date().toISOString();
     const requestId = paymentData.requestId || generateUniqueRequestId('pay');
 
@@ -1656,7 +1600,7 @@ export const StorageService = {
     }
 
     const targetCompId = expenseData.companyId || companyId || DEFAULT_COMPANY_ID;
-    const expNumber = expenseData.expenseNumber || await SupabaseSyncService.generateNextExpenseNumber(targetCompId);
+    const expNumber = expenseData.expenseNumber || "";
     const now = new Date().toISOString();
     const requestId = expenseData.requestId || generateUniqueRequestId('exp');
 
@@ -1871,16 +1815,23 @@ export const StorageService = {
       partyName: pdcData.partyName || 'Unknown Party',
       chequeNumber: pdcData.chequeNumber || '',
       bankName: pdcData.bankName || '',
+      clearedBankName: pdcData.clearedBankName,
       chequeDate: pdcData.chequeDate || now.split('T')[0],
       amount: Number(pdcData.amount || 0),
       status: pdcData.status || 'PENDING',
       referenceVoucherNo: pdcData.referenceVoucherNo || '',
       notes: pdcData.notes || '',
       clearedAt: pdcData.clearedAt,
-      createdAt: pdcData.createdAt || now
+      depositDate: pdcData.depositDate,
+      bounceDate: pdcData.bounceDate,
+      bounceReason: pdcData.bounceReason,
+      bounceCharges: pdcData.bounceCharges,
+      linkedJournalId: pdcData.linkedJournalId,
+      createdAt: pdcData.createdAt || now,
+      updatedAt: now
     };
 
-    const syncRes = await SupabaseSyncService.syncPdc(pdcToSave);
+    const syncRes = await SupabaseSyncService.savePdcRpc(pdcToSave);
     if (!syncRes.success) {
       return { success: false, error: syncRes.error || 'Database rejected PDC save.' };
     }
@@ -1895,12 +1846,217 @@ export const StorageService = {
     return { success: true, data: pdcToSave };
   },
 
+  async depositPdcAsync(
+    id: string,
+    depositDate: string,
+    bankName: string,
+    notes?: string
+  ): Promise<{ success: boolean; error?: string }> {
+    if (!checkOnline()) {
+      return { success: false, error: 'Internet connection required to deposit PDC.' };
+    }
+    const pdc = _inMemoryPdcs.find((p) => p.id === id);
+    if (!pdc) return { success: false, error: 'PDC record not found.' };
+
+    const reqId = generateUniqueRequestId('pdc_dep');
+    const syncRes = await SupabaseSyncService.depositPdcRpc(id, depositDate, bankName, notes, reqId);
+    if (!syncRes.success) {
+      return { success: false, error: syncRes.error || 'Database rejected PDC deposit.' };
+    }
+
+    const updatedPdc: PdcTransaction = {
+      ...pdc,
+      status: 'DEPOSITED',
+      depositDate,
+      clearedBankName: bankName || pdc.bankName,
+      notes: notes ? (pdc.notes ? `${pdc.notes} | ${notes}` : notes) : pdc.notes,
+      updatedAt: new Date().toISOString()
+    };
+
+    const idx = _inMemoryPdcs.findIndex((p) => p.id === id);
+    if (idx !== -1) _inMemoryPdcs[idx] = updatedPdc;
+
+    return { success: true };
+  },
+
+  async clearPdcAsync(
+    id: string,
+    clearedDate: string,
+    clearingBankName: string
+  ): Promise<{ success: boolean; journalId?: string; voucherNo?: string; error?: string }> {
+    if (!checkOnline()) {
+      return { success: false, error: 'Internet connection required to clear PDC.' };
+    }
+    const pdc = _inMemoryPdcs.find((p) => p.id === id);
+    if (!pdc) return { success: false, error: 'PDC record not found.' };
+
+    const reqId = generateUniqueRequestId('pdc_clr');
+    const syncRes = await SupabaseSyncService.clearPdcRpc(pdc, clearedDate, clearingBankName, reqId);
+    if (!syncRes.success) {
+      return { success: false, error: syncRes.error || 'Database rejected PDC clearance.' };
+    }
+
+    const nowIso = new Date().toISOString();
+    const updatedPdc: PdcTransaction = {
+      ...pdc,
+      status: 'CLEARED',
+      clearedAt: nowIso,
+      clearedBankName: clearingBankName,
+      linkedJournalId: syncRes.journalId,
+      updatedAt: nowIso
+    };
+
+    const idx = _inMemoryPdcs.findIndex((p) => p.id === id);
+    if (idx !== -1) _inMemoryPdcs[idx] = updatedPdc;
+
+    // Update Customer / Supplier Outstanding Balance in memory
+    if (pdc.type === 'RECEIVED' && pdc.partyId) {
+      const cIdx = _inMemoryCustomers.findIndex((c) => c.id === pdc.partyId);
+      if (cIdx !== -1) {
+        _inMemoryCustomers[cIdx].outstandingBalance = Number((_inMemoryCustomers[cIdx].outstandingBalance - pdc.amount).toFixed(2));
+      }
+    } else if (pdc.type === 'ISSUED' && pdc.partyId) {
+      const sIdx = _inMemorySuppliers.findIndex((s) => s.id === pdc.partyId);
+      if (sIdx !== -1) {
+        _inMemorySuppliers[sIdx].payableBalance = Number((_inMemorySuppliers[sIdx].payableBalance - pdc.amount).toFixed(2));
+      }
+    }
+
+    // Add Journal Entry in memory
+    const bankLedgerId = `bank_${clearingBankName.toLowerCase().replace(/\s+/g, '_')}`;
+    const jvNo = syncRes.voucherNo || `JV-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
+    const jvId = syncRes.journalId || `jv-pdc-${Date.now()}`;
+    const newJournal: JournalEntry = {
+      id: jvId,
+      requestId: `req_jrn_clr_${pdc.id}`,
+      companyId: pdc.companyId || DEFAULT_COMPANY_ID,
+      voucherNo: jvNo,
+      voucherType: 'PDC',
+      voucherDate: clearedDate,
+      narration: `PDC Cleared: Cheque #${pdc.chequeNumber} (${pdc.partyName})`,
+      debitTotal: pdc.amount,
+      creditTotal: pdc.amount,
+      lines: pdc.type === 'RECEIVED'
+        ? [
+            { id: `${jvId}_1`, ledgerId: bankLedgerId, ledgerName: clearingBankName, accountGroup: 'Bank Accounts', debit: pdc.amount, credit: 0, particulars: `PDC Cheque Cleared #${pdc.chequeNumber}` },
+            { id: `${jvId}_2`, ledgerId: pdc.partyId, ledgerName: pdc.partyName, accountGroup: 'Sundry Debtors', debit: 0, credit: pdc.amount, particulars: `Customer Realized: #${pdc.chequeNumber}` }
+          ]
+        : [
+            { id: `${jvId}_1`, ledgerId: pdc.partyId, ledgerName: pdc.partyName, accountGroup: 'Sundry Creditors', debit: pdc.amount, credit: 0, particulars: `Supplier Payment Cleared: #${pdc.chequeNumber}` },
+            { id: `${jvId}_2`, ledgerId: bankLedgerId, ledgerName: clearingBankName, accountGroup: 'Bank Accounts', debit: 0, credit: pdc.amount, particulars: `Disbursement: Cheque #${pdc.chequeNumber}` }
+          ],
+      createdAt: nowIso
+    };
+    _inMemoryJournalEntries.unshift(newJournal);
+
+    return { success: true, journalId: jvId, voucherNo: jvNo };
+  },
+
+  async bouncePdcAsync(
+    id: string,
+    bounceDate: string,
+    bankName: string,
+    reason?: string,
+    charges?: number
+  ): Promise<{ success: boolean; error?: string }> {
+    if (!checkOnline()) {
+      return { success: false, error: 'Internet connection required to bounce PDC.' };
+    }
+    const pdc = _inMemoryPdcs.find((p) => p.id === id);
+    if (!pdc) return { success: false, error: 'PDC record not found.' };
+
+    const wasCleared = pdc.status === 'CLEARED';
+    const reqId = generateUniqueRequestId('pdc_bnc');
+    const syncRes = await SupabaseSyncService.bouncePdcRpc(pdc, bounceDate, bankName, reason, charges, reqId);
+    if (!syncRes.success) {
+      return { success: false, error: syncRes.error || 'Database rejected PDC bounce.' };
+    }
+
+    const nowIso = new Date().toISOString();
+    const updatedPdc: PdcTransaction = {
+      ...pdc,
+      status: 'BOUNCED',
+      bounceDate,
+      bounceReason: reason || 'Dishonored by Bank',
+      bounceCharges: Number(charges || 0),
+      updatedAt: nowIso
+    };
+
+    const idx = _inMemoryPdcs.findIndex((p) => p.id === id);
+    if (idx !== -1) _inMemoryPdcs[idx] = updatedPdc;
+
+    // If previously cleared, restore Customer / Supplier Balance
+    if (wasCleared) {
+      if (pdc.type === 'RECEIVED' && pdc.partyId) {
+        const cIdx = _inMemoryCustomers.findIndex((c) => c.id === pdc.partyId);
+        if (cIdx !== -1) {
+          _inMemoryCustomers[cIdx].outstandingBalance = Number((_inMemoryCustomers[cIdx].outstandingBalance + pdc.amount).toFixed(2));
+        }
+      } else if (pdc.type === 'ISSUED' && pdc.partyId) {
+        const sIdx = _inMemorySuppliers.findIndex((s) => s.id === pdc.partyId);
+        if (sIdx !== -1) {
+          _inMemorySuppliers[sIdx].payableBalance = Number((_inMemorySuppliers[sIdx].payableBalance + pdc.amount).toFixed(2));
+        }
+      }
+    }
+
+    return { success: true };
+  },
+
+  async cancelPdcAsync(
+    id: string,
+    reason?: string,
+    isReturned: boolean = false
+  ): Promise<{ success: boolean; error?: string }> {
+    if (!checkOnline()) {
+      return { success: false, error: 'Internet connection required to cancel/return PDC.' };
+    }
+    const pdc = _inMemoryPdcs.find((p) => p.id === id);
+    if (!pdc) return { success: false, error: 'PDC record not found.' };
+
+    const reqId = generateUniqueRequestId('pdc_cnc');
+    const syncRes = await SupabaseSyncService.cancelPdcRpc(id, reason, isReturned, reqId);
+    if (!syncRes.success) {
+      return { success: false, error: syncRes.error || 'Database rejected PDC cancellation.' };
+    }
+
+    const targetStatus = isReturned ? 'RETURNED' : 'CANCELLED';
+    const updatedPdc: PdcTransaction = {
+      ...pdc,
+      status: targetStatus,
+      notes: reason ? (pdc.notes ? `${pdc.notes} | ${reason}` : reason) : pdc.notes,
+      updatedAt: new Date().toISOString()
+    };
+
+    const idx = _inMemoryPdcs.findIndex((p) => p.id === id);
+    if (idx !== -1) _inMemoryPdcs[idx] = updatedPdc;
+
+    return { success: true };
+  },
+
   async updatePdcStatusAsync(
     id: string,
     newStatus: PdcStatus,
     clearedBankName?: string,
     companyId?: string
   ): Promise<{ success: boolean; error?: string }> {
+    if (newStatus === 'CLEARED') {
+      const today = new Date().toISOString().split('T')[0];
+      return this.clearPdcAsync(id, today, clearedBankName || 'Commercial Bank');
+    }
+    if (newStatus === 'BOUNCED') {
+      const today = new Date().toISOString().split('T')[0];
+      return this.bouncePdcAsync(id, today, clearedBankName || 'Commercial Bank');
+    }
+    if (newStatus === 'CANCELLED' || newStatus === 'RETURNED') {
+      return this.cancelPdcAsync(id, undefined, newStatus === 'RETURNED');
+    }
+    if (newStatus === 'DEPOSITED') {
+      const today = new Date().toISOString().split('T')[0];
+      return this.depositPdcAsync(id, today, clearedBankName || 'Commercial Bank');
+    }
+
+    // Default sync fallback (e.g. returning to PENDING)
     if (!checkOnline()) {
       return { success: false, error: 'Internet connection required to update PDC status.' };
     }
@@ -1911,7 +2067,8 @@ export const StorageService = {
       ...pdc,
       status: newStatus,
       clearedBankName: clearedBankName || pdc.clearedBankName || pdc.bankName,
-      clearedAt: newStatus === 'CLEARED' ? new Date().toISOString() : undefined
+      clearedAt: undefined,
+      updatedAt: new Date().toISOString()
     };
 
     const syncRes = await SupabaseSyncService.syncPdc(updatedPdc);

@@ -43,6 +43,7 @@ import { UserManagement } from './components/UserManagement';
 import { CompanyManagement } from './components/CompanyManagement';
 import { DataImport } from './components/DataImport';
 import { PrintInvoiceModal } from './components/PrintInvoiceModal';
+import { Intercompany } from './components/Intercompany';
 import { ToastContainer, ToastMessage } from './components/Toast';
 import { ShortcutProvider, useShortcuts } from './lib/ShortcutContext';
 import { QuickSalesModal } from './components/QuickSalesModal';
@@ -244,6 +245,7 @@ function AppMain() {
     setPayments(StorageService.getPayments(activeCompId));
     setExpenses(StorageService.getExpenses(activeCompId));
     setPdcs(StorageService.getPdcs(activeCompId));
+    refreshSession();
   };
 
   const [isSyncingCloud, setIsSyncingCloud] = useState(false);
@@ -732,7 +734,7 @@ function AppMain() {
     );
   }
 
-  const activeCompany = companies.find((c) => c.id === session?.activeCompanyId) || companies[0];
+  const activeCompany = companies.find((c) => c.id === session?.company?.id) || companies[0];
 
   return (
     <div className="min-h-screen bg-slate-100 flex flex-col font-sans text-slate-900 selection:bg-yellow-300">
@@ -969,7 +971,10 @@ function AppMain() {
             />
           )}
 
-          {currentPage === 'users' && (
+          {currentPage === 'intercompany' && (
+              <Intercompany companies={companies} products={products} settings={settings} />
+            )}
+            {currentPage === 'users' && (
             <UserManagement
               currentUserId={session.user.id}
               showToast={addToast}

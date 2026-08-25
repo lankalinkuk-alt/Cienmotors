@@ -602,7 +602,13 @@ export interface PdcTransaction {
   referenceVoucherNo?: string;
   notes?: string;
   clearedAt?: string;
+  depositDate?: string;
+  bounceDate?: string;
+  bounceReason?: string;
+  bounceCharges?: number;
+  linkedJournalId?: string;
   createdAt: string;
+  updatedAt?: string;
 }
 
 export interface JournalEntry {

@@ -159,12 +159,15 @@ export async function testSupabaseConnection(url?: string, key?: string): Promis
     }
 
     // 2. Ensure company record exists in Supabase so foreign key constraints pass
-    await client.from('companies').upsert({
-      id: 'comp-1',
-      company_name: 'Default Company',
-      short_name: 'DEFAULT',
-      is_active: true
-    }, { onConflict: 'id' });
+    const { data: existingComp } = await client.from('companies').select('id').eq('id', 'comp-1').maybeSingle();
+    if (!existingComp) {
+      await client.from('companies').insert({
+        id: 'comp-1',
+        company_name: 'Unnamed Company',
+        short_name: 'CMP',
+        is_active: true
+      });
+    }
 
     // 3. Test product table WRITE (upsert) permission to verify RLS is disabled or allows inserts
     const testPingId = '__connection_test_ping__';
@@ -226,9 +229,28 @@ export async function testSupabaseConnection(url?: string, key?: string): Promis
 async function ensureCompanyExists(client: SupabaseClient, companyId?: string): Promise<void> {
   const compId = companyId || 'comp-1';
   try {
+    // Check if the company already exists in Supabase
+    const { data: existing, error } = await client
+      .from('companies')
+      .select('id')
+      .eq('id', compId)
+      .maybeSingle();
+
+    if (error) {
+      console.warn('Error checking if company exists:', error);
+      return;
+    }
+
+    if (existing) {
+      // Company already exists, DO NOT OVERWRITE
+      return;
+    }
+
+    // Company does not exist, insert a placeholder to satisfy foreign keys
+    let compName = 'Unnamed Company';
+    let shortName = 'CMP';
+
     const rawCompanies = localStorage.getItem('busy_ufo_companies');
-    let compName = 'Default Company';
-    let shortName = 'DEFAULT';
     if (rawCompanies) {
       const companies = JSON.parse(rawCompanies);
       const matched = companies.find((c: any) => c.id === compId);
@@ -237,12 +259,13 @@ async function ensureCompanyExists(client: SupabaseClient, companyId?: string): 
         shortName = matched.shortName || matched.short_name || shortName;
       }
     }
-    await client.from('companies').upsert({
+
+    await client.from('companies').insert({
       id: compId,
       company_name: compName,
       short_name: shortName,
       is_active: true
-    }, { onConflict: 'id' });
+    });
   } catch (e) {
     console.warn('Failed to ensure company row in Supabase:', e);
   }
@@ -509,10 +532,14 @@ export const SupabaseSyncService = {
 
       if (error || !data) return null;
 
-      return data.map((row: any) => ({
-        id: row.id,
-        companyName: row.company_name || row.companyName || 'Unnamed Company',
-        shortName: row.short_name || row.shortName || 'COMP',
+      return data.map((row: any) => {
+        let name = row.company_name || row.companyName || row.name || 'Unnamed Company';
+        let short = row.short_name || row.shortName || row.short || 'COMP';
+
+        return {
+          id: row.id,
+          companyName: name,
+          shortName: short,
         address: row.address || '',
         city: row.city || 'Colombo',
         district: row.district || 'Colombo',
@@ -535,7 +562,8 @@ export const SupabaseSyncService = {
         defaultDiscountType: row.default_discount_type || row.defaultDiscountType || 'PERCENT',
         createdAt: row.created_at || row.createdAt || new Date().toISOString(),
         updatedAt: row.updated_at || row.updatedAt || new Date().toISOString()
-      }));
+      };
+    });
     } catch (e) {
       console.error('Error fetching companies from Supabase:', e);
       return null;
@@ -730,176 +758,59 @@ export const SupabaseSyncService = {
   // --- ATOMIC NUMBER GENERATION FROM SUPABASE DATABASE ---
   async generateNextSalesInvoiceNumber(companyId: string): Promise<string> {
     const client = getSupabaseClient();
-    if (client) {
-      try {
-        const { data, error } = await client.rpc('generate_next_sales_invoice_number_rpc', {
-          p_company_id: companyId
-        });
-        if (!error && data) {
-          return data as string;
-        }
-      } catch (e) {
-        console.warn('RPC generate_next_sales_invoice_number_rpc call failed, falling back:', e);
-      }
+    if (!client) throw new Error("Supabase client not initialized.");
+    const { data, error } = await client.rpc('generate_next_sales_invoice_number_rpc', {
+      p_company_id: companyId
+    });
+    if (error || !data) {
+      throw new Error("Document numbering failed. Transaction was not saved. " + (error?.message || ''));
     }
-
-    const year = new Date().getFullYear();
-    const prefix = `INV-${year}-`;
-    let maxSeq = 0;
-
-    if (client) {
-      try {
-        const { data } = await client
-          .from('busy_ufo_sales')
-          .select('invoice_number')
-          .eq('company_id', companyId)
-          .like('invoice_number', `${prefix}%`);
-
-        if (data) {
-          for (const row of data) {
-            if (row.invoice_number && row.invoice_number.startsWith(prefix)) {
-              const num = parseInt(row.invoice_number.replace(prefix, ''), 10);
-              if (!isNaN(num) && num > maxSeq) maxSeq = num;
-            }
-          }
-        }
-      } catch (e) {
-        console.warn('Error querying next sales invoice number from Supabase:', e);
-      }
-    }
-    return `${prefix}${String(maxSeq + 1).padStart(4, '0')}`;
+    return data as string;
   },
-
   async generateNextPurchaseNumber(companyId: string): Promise<string> {
     const client = getSupabaseClient();
-    if (client) {
-      try {
-        const { data, error } = await client.rpc('generate_next_purchase_number_rpc', {
-          p_company_id: companyId
-        });
-        if (!error && data) {
-          return data as string;
-        }
-      } catch (e) {
-        console.warn('RPC generate_next_purchase_number_rpc call failed, falling back:', e);
-      }
+    if (!client) throw new Error("Supabase client not initialized.");
+    const { data, error } = await client.rpc('generate_next_purchase_number_rpc', {
+      p_company_id: companyId
+    });
+    if (error || !data) {
+      throw new Error("Document numbering failed. Transaction was not saved. " + (error?.message || ''));
     }
-
-    const year = new Date().getFullYear();
-    const prefix = `PUR-${year}-`;
-    let maxSeq = 0;
-
-    if (client) {
-      try {
-        const { data } = await client
-          .from('busy_ufo_purchases')
-          .select('purchase_number')
-          .eq('company_id', companyId)
-          .like('purchase_number', `${prefix}%`);
-
-        if (data) {
-          for (const row of data) {
-            if (row.purchase_number && row.purchase_number.startsWith(prefix)) {
-              const num = parseInt(row.purchase_number.replace(prefix, ''), 10);
-              if (!isNaN(num) && num > maxSeq) maxSeq = num;
-            }
-          }
-        }
-      } catch (e) {
-        console.warn('Error querying next purchase number from Supabase:', e);
-      }
-    }
-    return `${prefix}${String(maxSeq + 1).padStart(4, '0')}`;
+    return data as string;
   },
-
   async generateNextReceiptNumber(companyId: string): Promise<string> {
     const client = getSupabaseClient();
-    const year = new Date().getFullYear();
-    const prefix = `REC-${year}-`;
-    let maxSeq = 0;
-
-    if (client) {
-      try {
-        const { data } = await client
-          .from('busy_ufo_customer_receipts')
-          .select('receipt_number')
-          .eq('company_id', companyId)
-          .like('receipt_number', `${prefix}%`);
-
-        if (data) {
-          for (const row of data) {
-            if (row.receipt_number && row.receipt_number.startsWith(prefix)) {
-              const num = parseInt(row.receipt_number.replace(prefix, ''), 10);
-              if (!isNaN(num) && num > maxSeq) maxSeq = num;
-            }
-          }
-        }
-      } catch (e) {
-        console.warn('Error querying next receipt number from Supabase:', e);
-      }
+    if (!client) throw new Error("Supabase client not initialized.");
+    const { data, error } = await client.rpc('generate_next_receipt_number_rpc', {
+      p_company_id: companyId
+    });
+    if (error || !data) {
+      throw new Error("Document numbering failed. Transaction was not saved. " + (error?.message || ''));
     }
-    return `${prefix}${String(maxSeq + 1).padStart(4, '0')}`;
+    return data as string;
   },
-
   async generateNextPaymentNumber(companyId: string): Promise<string> {
     const client = getSupabaseClient();
-    const year = new Date().getFullYear();
-    const prefix = `PAY-${year}-`;
-    let maxSeq = 0;
-
-    if (client) {
-      try {
-        const { data } = await client
-          .from('busy_ufo_supplier_payments')
-          .select('payment_number')
-          .eq('company_id', companyId)
-          .like('payment_number', `${prefix}%`);
-
-        if (data) {
-          for (const row of data) {
-            if (row.payment_number && row.payment_number.startsWith(prefix)) {
-              const num = parseInt(row.payment_number.replace(prefix, ''), 10);
-              if (!isNaN(num) && num > maxSeq) maxSeq = num;
-            }
-          }
-        }
-      } catch (e) {
-        console.warn('Error querying next payment number from Supabase:', e);
-      }
+    if (!client) throw new Error("Supabase client not initialized.");
+    const { data, error } = await client.rpc('generate_next_payment_number_rpc', {
+      p_company_id: companyId
+    });
+    if (error || !data) {
+      throw new Error("Document numbering failed. Transaction was not saved. " + (error?.message || ''));
     }
-    return `${prefix}${String(maxSeq + 1).padStart(4, '0')}`;
+    return data as string;
   },
-
   async generateNextExpenseNumber(companyId: string): Promise<string> {
     const client = getSupabaseClient();
-    const year = new Date().getFullYear();
-    const prefix = `EXP-${year}-`;
-    let maxSeq = 0;
-
-    if (client) {
-      try {
-        const { data } = await client
-          .from('busy_ufo_expenses')
-          .select('expense_number')
-          .eq('company_id', companyId)
-          .like('expense_number', `${prefix}%`);
-
-        if (data) {
-          for (const row of data) {
-            if (row.expense_number && row.expense_number.startsWith(prefix)) {
-              const num = parseInt(row.expense_number.replace(prefix, ''), 10);
-              if (!isNaN(num) && num > maxSeq) maxSeq = num;
-            }
-          }
-        }
-      } catch (e) {
-        console.warn('Error querying next expense number from Supabase:', e);
-      }
+    if (!client) throw new Error("Supabase client not initialized.");
+    const { data, error } = await client.rpc('generate_next_expense_number_rpc', {
+      p_company_id: companyId
+    });
+    if (error || !data) {
+      throw new Error("Document numbering failed. Transaction was not saved. " + (error?.message || ''));
     }
-    return `${prefix}${String(maxSeq + 1).padStart(4, '0')}`;
+    return data as string;
   },
-
-  // --- SALES INVOICES ---
   async syncSaleInvoice(sale: SaleInvoice): Promise<{ success: boolean; error?: string; isDuplicate?: boolean; existingData?: SaleInvoice }> {
     const client = getSupabaseClient();
     if (!client) return { success: false, error: 'Supabase not configured' };
@@ -913,116 +824,54 @@ export const SupabaseSyncService = {
     try {
       await ensureCompanyExists(client, sale.companyId || 'comp-1');
 
-      // 1. Persistent Idempotency Check by request_id
-      const { data: existingSale } = await client
-        .from('busy_ufo_sales')
-        .select('*')
-        .eq('request_id', reqId)
-        .maybeSingle();
-
-      if (existingSale) {
-        console.info(`Request ID "${reqId}" already processed in database. Returning existing sale.`);
-        return {
-          success: true,
-          isDuplicate: true,
-          existingData: {
-            id: existingSale.id,
-            requestId: existingSale.request_id || existingSale.id,
-            companyId: existingSale.company_id || 'comp-1',
-            invoiceNumber: existingSale.invoice_number,
-            date: existingSale.invoice_date,
-            customerId: existingSale.customer_id || undefined,
-            customerName: existingSale.customer_name,
-            type: existingSale.sale_type as 'CASH' | 'CREDIT',
-            items: sale.items || [],
-            subtotal: Number(existingSale.total_amount || 0),
-            discount: Number(existingSale.overall_discount || 0),
-            grandTotal: Number(existingSale.grand_total || 0),
-            paidAmount: Number(existingSale.paid_amount || 0),
-            dueAmount: Number(existingSale.due_amount || 0),
-            notes: existingSale.notes || '',
-            createdAt: existingSale.created_at
-          }
-        };
-      }
-
-      // 2. Concurrency-safe Invoice Number Assignment
-      let finalInvoiceNum = sale.invoiceNumber;
-      if (!finalInvoiceNum) {
-        finalInvoiceNum = await this.generateNextSalesInvoiceNumber(sale.companyId || 'comp-1');
-      } else {
-        const { data: numCheck } = await client
-          .from('busy_ufo_sales')
-          .select('id')
-          .eq('company_id', sale.companyId || 'comp-1')
-          .eq('invoice_number', finalInvoiceNum)
-          .neq('id', sale.id)
-          .maybeSingle();
-
-        if (numCheck) {
-          finalInvoiceNum = await this.generateNextSalesInvoiceNumber(sale.companyId || 'comp-1');
-        }
-      }
-
-      const salePayload = {
-        id: sale.id,
-        request_id: reqId,
-        invoice_number: finalInvoiceNum,
-        invoice_date: sale.date,
-        customer_id: sale.customerId || null,
-        customer_name: sale.customerName,
-        sale_type: sale.type,
-        total_amount: Number(sale.subtotal || 0),
-        overall_discount: Number(sale.discount || 0),
-        vat_amount: 0,
-        grand_total: Number(sale.grandTotal || 0),
-        paid_amount: Number(sale.paidAmount || 0),
-        due_amount: Number(sale.dueAmount || 0),
-        payment_status: sale.dueAmount <= 0 ? 'PAID' : (sale.paidAmount > 0 ? 'PARTIAL' : 'UNPAID'),
-        company_id: sale.companyId || 'comp-1',
-        notes: sale.notes || ''
-      };
-
-      const { error: saleError } = await client
-        .from('busy_ufo_sales')
-        .upsert(salePayload, { onConflict: 'id' });
-
-      if (saleError) {
-        if (saleError.message?.includes('request_id') || saleError.code === '23505') {
-          console.info(`Request ID "${reqId}" unique constraint caught duplicate transaction.`);
-          return { success: true, isDuplicate: true };
-        }
-        console.warn('Supabase sale sync error:', saleError);
-        return { success: false, error: saleError.message };
-      }
-
-      // Upsert Items
-      if (sale.items && sale.items.length > 0) {
-        const itemRows = sale.items.map((item) => ({
-          invoice_id: sale.id,
-          product_id: item.productId || null,
-          product_code: item.productCode || '',
-          product_name: item.productName || '',
+      const { data, error } = await client.rpc('post_sale_invoice_rpc', {
+        p_request_id: reqId,
+        p_company_id: sale.companyId || 'comp-1',
+        p_customer_id: sale.customerId || null,
+        p_customer_name: sale.customerName,
+        p_sale_type: sale.type,
+        p_invoice_date: sale.date,
+        p_total_amount: Number(sale.subtotal || 0),
+        p_overall_discount: Number(sale.discount || 0),
+        p_grand_total: Number(sale.grandTotal || 0),
+        p_paid_amount: Number(sale.paidAmount || 0),
+        p_due_amount: Number(sale.dueAmount || 0),
+        p_notes: sale.notes || '',
+        p_items: sale.items.map(item => ({
+          productId: item.productId,
+          productCode: item.productCode,
+          productName: item.productName,
           quantity: Number(item.quantity || 0),
-          unit_price: Number(item.unitPrice || 0),
+          unitPrice: Number(item.unitPrice || 0),
           discount: Number(item.discount || 0),
-          discount_type: item.discountType || 'PERCENT',
+          discountType: item.discountType || 'PERCENT',
           total: Number(item.total || 0)
-        }));
+        }))
+      });
 
-        await client.from('busy_ufo_sale_items').delete().eq('invoice_id', sale.id);
-        await client.from('busy_ufo_sale_items').insert(itemRows);
+      if (error) {
+        return { success: false, error: error.message };
       }
 
-      return { success: true };
+      const isDuplicate = data?.is_duplicate || false;
+      const returnedData = data?.data;
+
+      return { 
+        success: true, 
+        isDuplicate, 
+        existingData: returnedData ? {
+          ...sale,
+          id: returnedData.id,
+          invoiceNumber: returnedData.invoice_number,
+          requestId: returnedData.request_id
+        } : undefined
+      };
     } catch (e: any) {
-      console.warn('Supabase sale sync exception:', e);
       return { success: false, error: e?.message };
     } finally {
       _inFlightRequests.delete(reqId);
     }
   },
-
   async deleteSaleInvoice(invoiceId: string): Promise<{ success: boolean; error?: string }> {
     const client = getSupabaseClient();
     if (!client) return { success: false, error: 'Supabase not configured' };
@@ -1066,115 +915,54 @@ export const SupabaseSyncService = {
     try {
       await ensureCompanyExists(client, purchase.companyId || 'comp-1');
 
-      // 1. Persistent Idempotency Check
-      const { data: existingPur } = await client
-        .from('busy_ufo_purchases')
-        .select('*')
-        .eq('request_id', reqId)
-        .maybeSingle();
-
-      if (existingPur) {
-        console.info(`Request ID "${reqId}" already processed in database. Returning existing purchase.`);
-        return {
-          success: true,
-          isDuplicate: true,
-          existingData: {
-            id: existingPur.id,
-            requestId: existingPur.request_id || existingPur.id,
-            companyId: existingPur.company_id || 'comp-1',
-            purchaseNumber: existingPur.purchase_number,
-            date: existingPur.purchase_date,
-            supplierId: existingPur.supplier_id || '',
-            supplierName: existingPur.supplier_name,
-            type: existingPur.purchase_type as 'CASH' | 'CREDIT',
-            items: purchase.items || [],
-            subtotal: Number(existingPur.total_amount || 0),
-            discount: Number(existingPur.overall_discount || 0),
-            grandTotal: Number(existingPur.grand_total || 0),
-            paidAmount: Number(existingPur.paid_amount || 0),
-            dueAmount: Number(existingPur.due_amount || 0),
-            notes: existingPur.notes || '',
-            createdAt: existingPur.created_at
-          }
-        };
-      }
-
-      // 2. Concurrency-safe Purchase Number Assignment
-      let finalPurNum = purchase.purchaseNumber;
-      if (!finalPurNum) {
-        finalPurNum = await this.generateNextPurchaseNumber(purchase.companyId || 'comp-1');
-      } else {
-        const { data: numCheck } = await client
-          .from('busy_ufo_purchases')
-          .select('id')
-          .eq('company_id', purchase.companyId || 'comp-1')
-          .eq('purchase_number', finalPurNum)
-          .neq('id', purchase.id)
-          .maybeSingle();
-
-        if (numCheck) {
-          finalPurNum = await this.generateNextPurchaseNumber(purchase.companyId || 'comp-1');
-        }
-      }
-
-      const purchasePayload = {
-        id: purchase.id,
-        request_id: reqId,
-        purchase_number: finalPurNum,
-        purchase_date: purchase.date,
-        supplier_id: purchase.supplierId || null,
-        supplier_name: purchase.supplierName,
-        purchase_type: purchase.type,
-        total_amount: Number(purchase.subtotal || 0),
-        overall_discount: Number(purchase.discount || 0),
-        vat_amount: 0,
-        grand_total: Number(purchase.grandTotal || 0),
-        paid_amount: Number(purchase.paidAmount || 0),
-        due_amount: Number(purchase.dueAmount || 0),
-        payment_status: purchase.dueAmount <= 0 ? 'PAID' : (purchase.paidAmount > 0 ? 'PARTIAL' : 'UNPAID'),
-        company_id: purchase.companyId || 'comp-1',
-        notes: purchase.notes || ''
-      };
-
-      const { error: purError } = await client
-        .from('busy_ufo_purchases')
-        .upsert(purchasePayload, { onConflict: 'id' });
-
-      if (purError) {
-        if (purError.message?.includes('request_id') || purError.code === '23505') {
-          console.info(`Request ID "${reqId}" unique constraint caught duplicate transaction.`);
-          return { success: true, isDuplicate: true };
-        }
-        console.warn('Supabase purchase sync error:', purError);
-        return { success: false, error: purError.message };
-      }
-
-      if (purchase.items && purchase.items.length > 0) {
-        const itemRows = purchase.items.map((item) => ({
-          purchase_id: purchase.id,
-          product_id: item.productId || null,
-          product_code: item.productCode || '',
-          product_name: item.productName || '',
+      const { data, error } = await client.rpc('post_purchase_invoice_rpc', {
+        p_request_id: reqId,
+        p_company_id: purchase.companyId || 'comp-1',
+        p_supplier_id: purchase.supplierId || null,
+        p_supplier_name: purchase.supplierName,
+        p_purchase_type: purchase.type,
+        p_purchase_date: purchase.date,
+        p_total_amount: Number(purchase.subtotal || 0),
+        p_overall_discount: Number(purchase.discount || 0),
+        p_grand_total: Number(purchase.grandTotal || 0),
+        p_paid_amount: Number(purchase.paidAmount || 0),
+        p_due_amount: Number(purchase.dueAmount || 0),
+        p_notes: purchase.notes || '',
+        p_items: purchase.items.map(item => ({
+          productId: item.productId,
+          productCode: item.productCode,
+          productName: item.productName,
           quantity: Number(item.quantity || 0),
-          unit_cost: Number(item.unitCost || 0),
+          unitCost: Number(item.unitCost || 0),
           discount: Number(item.discount || 0),
-          discount_type: item.discountType || 'PERCENT',
+          discountType: item.discountType || 'PERCENT',
           total: Number(item.total || 0)
-        }));
+        }))
+      });
 
-        await client.from('busy_ufo_purchase_items').delete().eq('purchase_id', purchase.id);
-        await client.from('busy_ufo_purchase_items').insert(itemRows);
+      if (error) {
+        return { success: false, error: error.message };
       }
 
-      return { success: true };
+      const isDuplicate = data?.is_duplicate || false;
+      const returnedData = data?.data;
+
+      return { 
+        success: true, 
+        isDuplicate, 
+        existingData: returnedData ? {
+          ...purchase,
+          id: returnedData.id,
+          purchaseNumber: returnedData.purchase_number,
+          requestId: returnedData.request_id
+        } : undefined
+      };
     } catch (e: any) {
-      console.warn('Supabase purchase sync exception:', e);
       return { success: false, error: e?.message };
     } finally {
       _inFlightRequests.delete(reqId);
     }
   },
-
   async deletePurchaseInvoice(purchaseId: string): Promise<{ success: boolean; error?: string }> {
     const client = getSupabaseClient();
     if (!client) return { success: false, error: 'Supabase not configured' };
@@ -1825,7 +1613,378 @@ export const SupabaseSyncService = {
     }
   },
 
-  // --- PDC MANAGEMENT SYNC ---
+  // --- PDC MANAGEMENT SYNC & ATOMIC RPC WORKFLOW ---
+  async savePdcRpc(pdc: PdcTransaction): Promise<{ success: boolean; data?: any; error?: string; isDuplicate?: boolean }> {
+    const client = getSupabaseClient();
+    if (!client) return { success: false, error: 'Supabase not configured' };
+
+    const reqId = pdc.requestId || `req_pdc_save_${pdc.id}`;
+    if (_inFlightRequests.has(reqId)) {
+      return { success: false, error: 'A transaction with this Request ID is already in-flight.' };
+    }
+    _inFlightRequests.add(reqId);
+
+    try {
+      await ensureCompanyExists(client, pdc.companyId || 'comp-1');
+
+      // Try PostgreSQL RPC
+      const { data, error } = await client.rpc('save_pdc_rpc', {
+        p_request_id: reqId,
+        p_company_id: pdc.companyId || 'comp-1',
+        p_type: pdc.type,
+        p_party_id: pdc.partyId || null,
+        p_party_type: pdc.partyType,
+        p_party_name: pdc.partyName,
+        p_cheque_number: pdc.chequeNumber,
+        p_bank_name: pdc.bankName,
+        p_cheque_date: pdc.chequeDate,
+        p_amount: Number(pdc.amount || 0),
+        p_status: pdc.status || 'PENDING',
+        p_reference_voucher_no: pdc.referenceVoucherNo || '',
+        p_notes: pdc.notes || ''
+      });
+
+      if (!error && data) {
+        if (typeof data === 'object' && data.success !== undefined) {
+          return { success: data.success, isDuplicate: data.is_duplicate, data: data.data };
+        }
+        return { success: true, data };
+      }
+
+      // If RPC is missing or fails gracefully, fallback to direct upsert
+      const payload = {
+        id: pdc.id,
+        request_id: reqId,
+        company_id: pdc.companyId || 'comp-1',
+        type: pdc.type,
+        party_id: pdc.partyId || null,
+        party_type: pdc.partyType,
+        party_name: pdc.partyName,
+        cheque_number: pdc.chequeNumber,
+        bank_name: pdc.bankName,
+        cleared_bank_name: pdc.clearedBankName || null,
+        cheque_date: pdc.chequeDate,
+        amount: Number(pdc.amount || 0),
+        status: pdc.status || 'PENDING',
+        reference_voucher_no: pdc.referenceVoucherNo || '',
+        notes: pdc.notes || '',
+        cleared_at: pdc.clearedAt || null,
+        deposit_date: pdc.depositDate || null,
+        bounce_date: pdc.bounceDate || null,
+        bounce_reason: pdc.bounceReason || null,
+        bounce_charges: pdc.bounceCharges || 0.00,
+        linked_journal_id: pdc.linkedJournalId || null
+      };
+
+      const { error: upsertErr } = await client.from('busy_ufo_pdcs').upsert(payload, { onConflict: 'id' });
+      if (upsertErr) {
+        if (upsertErr.message?.includes('request_id') || upsertErr.code === '23505') {
+          return { success: true, isDuplicate: true };
+        }
+        return { success: false, error: upsertErr.message };
+      }
+      return { success: true, data: payload };
+    } catch (e: any) {
+      return { success: false, error: e?.message };
+    } finally {
+      _inFlightRequests.delete(reqId);
+    }
+  },
+
+  async depositPdcRpc(
+    pdcId: string,
+    depositDate: string,
+    bankName: string,
+    notes?: string,
+    requestId?: string
+  ): Promise<{ success: boolean; data?: any; error?: string; isDuplicate?: boolean }> {
+    const client = getSupabaseClient();
+    if (!client) return { success: false, error: 'Supabase not configured' };
+
+    const reqId = requestId || `req_pdc_dep_${pdcId}_${Date.now()}`;
+    if (_inFlightRequests.has(reqId)) {
+      return { success: false, error: 'Deposit request already in-flight.' };
+    }
+    _inFlightRequests.add(reqId);
+
+    try {
+      const { data, error } = await client.rpc('deposit_pdc_rpc', {
+        p_pdc_id: pdcId,
+        p_request_id: reqId,
+        p_deposit_date: depositDate,
+        p_bank_name: bankName,
+        p_notes: notes || ''
+      });
+
+      if (!error && data) {
+        if (typeof data === 'object' && data.success !== undefined) {
+          return { success: data.success, data: data.data, isDuplicate: data.is_duplicate };
+        }
+        return { success: true, data };
+      }
+
+      // Fallback direct update
+      const { error: updErr } = await client
+        .from('busy_ufo_pdcs')
+        .update({
+          status: 'DEPOSITED',
+          deposit_date: depositDate,
+          cleared_bank_name: bankName,
+          notes: notes ? notes : undefined,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', pdcId);
+
+      if (updErr) return { success: false, error: updErr.message };
+      return { success: true };
+    } catch (e: any) {
+      return { success: false, error: e?.message };
+    } finally {
+      _inFlightRequests.delete(reqId);
+    }
+  },
+
+  async clearPdcRpc(
+    pdc: PdcTransaction,
+    clearedDate: string,
+    clearingBankName: string,
+    requestId?: string
+  ): Promise<{ success: boolean; data?: any; journalId?: string; voucherNo?: string; error?: string }> {
+    const client = getSupabaseClient();
+    if (!client) return { success: false, error: 'Supabase not configured' };
+
+    const reqId = requestId || `req_pdc_clr_${pdc.id}_${Date.now()}`;
+    if (_inFlightRequests.has(reqId)) {
+      return { success: false, error: 'Clearance request already in-flight.' };
+    }
+    _inFlightRequests.add(reqId);
+
+    try {
+      const bankLedgerId = `bank_${clearingBankName.toLowerCase().replace(/\s+/g, '_')}`;
+      const partyLedgerId = pdc.partyId;
+
+      const { data, error } = await client.rpc('clear_pdc_rpc', {
+        p_pdc_id: pdc.id,
+        p_request_id: reqId,
+        p_cleared_date: clearedDate,
+        p_bank_ledger_id: bankLedgerId,
+        p_bank_ledger_name: clearingBankName,
+        p_party_ledger_id: partyLedgerId,
+        p_party_ledger_name: pdc.partyName
+      });
+
+      if (!error && data) {
+        if (typeof data === 'object' && data.success !== undefined) {
+          return {
+            success: data.success,
+            data: data.data,
+            journalId: data.journal_id,
+            voucherNo: data.voucher_no
+          };
+        }
+        return { success: true, data };
+      }
+
+      // Fallback: Client-side atomic orchestration
+      const nowIso = new Date().toISOString();
+      const jvNo = `JV-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
+      const jvId = `jv-pdc-${Date.now()}`;
+
+      // 1. Update PDC
+      const { error: updErr } = await client
+        .from('busy_ufo_pdcs')
+        .update({
+          status: 'CLEARED',
+          cleared_at: nowIso,
+          cleared_bank_name: clearingBankName,
+          linked_journal_id: jvId,
+          updated_at: nowIso
+        })
+        .eq('id', pdc.id);
+
+      if (updErr) return { success: false, error: updErr.message };
+
+      // 2. Update Customer / Supplier Outstanding Balance
+      if (pdc.type === 'RECEIVED' && pdc.partyId) {
+        const { data: cust } = await client.from('busy_ufo_customers').select('current_balance').eq('id', pdc.partyId).single();
+        if (cust) {
+          const newBal = Number(cust.current_balance || 0) - Number(pdc.amount || 0);
+          await client.from('busy_ufo_customers').update({ current_balance: newBal, updated_at: nowIso }).eq('id', pdc.partyId);
+        }
+      } else if (pdc.type === 'ISSUED' && pdc.partyId) {
+        const { data: supp } = await client.from('busy_ufo_suppliers').select('current_balance').eq('id', pdc.partyId).single();
+        if (supp) {
+          const newBal = Number(supp.current_balance || 0) - Number(pdc.amount || 0);
+          await client.from('busy_ufo_suppliers').update({ current_balance: newBal, updated_at: nowIso }).eq('id', pdc.partyId);
+        }
+      }
+
+      // 3. Post Journal Entry
+      const lines = pdc.type === 'RECEIVED'
+        ? [
+            { id: `${jvId}_1`, journal_id: jvId, entry_id: jvId, ledger_id: bankLedgerId, ledger_name: clearingBankName, account_id: bankLedgerId, account_name: clearingBankName, account_group: 'Bank Accounts', debit: pdc.amount, credit: 0, particulars: `PDC Cheque Cleared #${pdc.chequeNumber}` },
+            { id: `${jvId}_2`, journal_id: jvId, entry_id: jvId, ledger_id: pdc.partyId, ledger_name: pdc.partyName, account_id: pdc.partyId, account_name: pdc.partyName, account_group: 'Sundry Debtors', debit: 0, credit: pdc.amount, particulars: `Customer Realized: #${pdc.chequeNumber}` }
+          ]
+        : [
+            { id: `${jvId}_1`, journal_id: jvId, entry_id: jvId, ledger_id: pdc.partyId, ledger_name: pdc.partyName, account_id: pdc.partyId, account_name: pdc.partyName, account_group: 'Sundry Creditors', debit: pdc.amount, credit: 0, particulars: `Supplier Payment Cleared: #${pdc.chequeNumber}` },
+            { id: `${jvId}_2`, journal_id: jvId, entry_id: jvId, ledger_id: bankLedgerId, ledger_name: clearingBankName, account_id: bankLedgerId, account_name: clearingBankName, account_group: 'Bank Accounts', debit: 0, credit: pdc.amount, particulars: `Disbursement: Cheque #${pdc.chequeNumber}` }
+          ];
+
+      await client.from('busy_ufo_journal_entries').insert({
+        id: jvId,
+        request_id: `req_jrn_clr_${pdc.id}`,
+        company_id: pdc.companyId || 'comp-1',
+        entry_number: jvNo,
+        voucher_no: jvNo,
+        voucher_type: 'PDC',
+        voucher_date: clearedDate,
+        date: clearedDate,
+        narration: `PDC Cleared: Cheque #${pdc.chequeNumber} (${pdc.partyName})`,
+        debit_total: pdc.amount,
+        credit_total: pdc.amount
+      });
+      await client.from('busy_ufo_journal_lines').insert(lines);
+
+      return { success: true, journalId: jvId, voucherNo: jvNo };
+    } catch (e: any) {
+      return { success: false, error: e?.message };
+    } finally {
+      _inFlightRequests.delete(reqId);
+    }
+  },
+
+  async bouncePdcRpc(
+    pdc: PdcTransaction,
+    bounceDate: string,
+    bankName: string,
+    bounceReason?: string,
+    bounceCharges?: number,
+    requestId?: string
+  ): Promise<{ success: boolean; data?: any; error?: string }> {
+    const client = getSupabaseClient();
+    if (!client) return { success: false, error: 'Supabase not configured' };
+
+    const reqId = requestId || `req_pdc_bnc_${pdc.id}_${Date.now()}`;
+    if (_inFlightRequests.has(reqId)) {
+      return { success: false, error: 'Bounce request already in-flight.' };
+    }
+    _inFlightRequests.add(reqId);
+
+    try {
+      const bankLedgerId = `bank_${bankName.toLowerCase().replace(/\s+/g, '_')}`;
+      const partyLedgerId = pdc.partyId;
+
+      const { data, error } = await client.rpc('bounce_pdc_rpc', {
+        p_pdc_id: pdc.id,
+        p_request_id: reqId,
+        p_bounce_date: bounceDate,
+        p_bank_ledger_id: bankLedgerId,
+        p_bank_ledger_name: bankName,
+        p_party_ledger_id: partyLedgerId,
+        p_party_ledger_name: pdc.partyName,
+        p_bounce_charges: Number(bounceCharges || 0),
+        p_notes: bounceReason || 'Dishonored by Bank'
+      });
+
+      if (!error && data) {
+        if (typeof data === 'object' && data.success !== undefined) {
+          return { success: data.success, data: data.data };
+        }
+        return { success: true, data };
+      }
+
+      // Fallback
+      const nowIso = new Date().toISOString();
+      const wasCleared = pdc.status === 'CLEARED';
+
+      // 1. If previously cleared, reverse customer/supplier balance
+      if (wasCleared) {
+        if (pdc.type === 'RECEIVED' && pdc.partyId) {
+          const { data: cust } = await client.from('busy_ufo_customers').select('current_balance').eq('id', pdc.partyId).single();
+          if (cust) {
+            const newBal = Number(cust.current_balance || 0) + Number(pdc.amount || 0);
+            await client.from('busy_ufo_customers').update({ current_balance: newBal, updated_at: nowIso }).eq('id', pdc.partyId);
+          }
+        } else if (pdc.type === 'ISSUED' && pdc.partyId) {
+          const { data: supp } = await client.from('busy_ufo_suppliers').select('current_balance').eq('id', pdc.partyId).single();
+          if (supp) {
+            const newBal = Number(supp.current_balance || 0) + Number(pdc.amount || 0);
+            await client.from('busy_ufo_suppliers').update({ current_balance: newBal, updated_at: nowIso }).eq('id', pdc.partyId);
+          }
+        }
+      }
+
+      // 2. Update PDC
+      const { error: updErr } = await client
+        .from('busy_ufo_pdcs')
+        .update({
+          status: 'BOUNCED',
+          bounce_date: bounceDate,
+          bounce_reason: bounceReason || 'Dishonored by Bank',
+          bounce_charges: Number(bounceCharges || 0),
+          updated_at: nowIso
+        })
+        .eq('id', pdc.id);
+
+      if (updErr) return { success: false, error: updErr.message };
+      return { success: true };
+    } catch (e: any) {
+      return { success: false, error: e?.message };
+    } finally {
+      _inFlightRequests.delete(reqId);
+    }
+  },
+
+  async cancelPdcRpc(
+    pdcId: string,
+    reason?: string,
+    isReturned: boolean = false,
+    requestId?: string
+  ): Promise<{ success: boolean; data?: any; error?: string }> {
+    const client = getSupabaseClient();
+    if (!client) return { success: false, error: 'Supabase not configured' };
+
+    const reqId = requestId || `req_pdc_cnc_${pdcId}_${Date.now()}`;
+    if (_inFlightRequests.has(reqId)) {
+      return { success: false, error: 'Cancellation request already in-flight.' };
+    }
+    _inFlightRequests.add(reqId);
+
+    try {
+      const { data, error } = await client.rpc('cancel_pdc_rpc', {
+        p_pdc_id: pdcId,
+        p_request_id: reqId,
+        p_reason: reason || '',
+        p_is_returned: isReturned
+      });
+
+      if (!error && data) {
+        if (typeof data === 'object' && data.success !== undefined) {
+          return { success: data.success, data: data.data };
+        }
+        return { success: true, data };
+      }
+
+      // Fallback
+      const targetStatus = isReturned ? 'RETURNED' : 'CANCELLED';
+      const { error: updErr } = await client
+        .from('busy_ufo_pdcs')
+        .update({
+          status: targetStatus,
+          notes: reason ? reason : undefined,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', pdcId);
+
+      if (updErr) return { success: false, error: updErr.message };
+      return { success: true };
+    } catch (e: any) {
+      return { success: false, error: e?.message };
+    } finally {
+      _inFlightRequests.delete(reqId);
+    }
+  },
+
   async syncPdc(pdc: PdcTransaction): Promise<{ success: boolean; error?: string; isDuplicate?: boolean }> {
     const client = getSupabaseClient();
     if (!client) return { success: false, error: 'Supabase not configured' };
@@ -1849,12 +2008,18 @@ export const SupabaseSyncService = {
         party_name: pdc.partyName,
         cheque_number: pdc.chequeNumber,
         bank_name: pdc.bankName,
+        cleared_bank_name: pdc.clearedBankName || null,
         cheque_date: pdc.chequeDate,
         amount: Number(pdc.amount || 0),
         status: pdc.status,
         reference_voucher_no: pdc.referenceVoucherNo || '',
         notes: pdc.notes || '',
-        cleared_at: pdc.clearedAt || null
+        cleared_at: pdc.clearedAt || null,
+        deposit_date: pdc.depositDate || null,
+        bounce_date: pdc.bounceDate || null,
+        bounce_reason: pdc.bounceReason || null,
+        bounce_charges: pdc.bounceCharges || 0.00,
+        linked_journal_id: pdc.linkedJournalId || null
       };
 
       const { error } = await client.from('busy_ufo_pdcs').upsert(payload, { onConflict: 'id' });
@@ -1902,13 +2067,20 @@ export const SupabaseSyncService = {
         partyName: row.party_name,
         chequeNumber: row.cheque_number,
         bankName: row.bank_name,
+        clearedBankName: row.cleared_bank_name || undefined,
         chequeDate: row.cheque_date,
         amount: Number(row.amount || 0),
         status: row.status as any,
         referenceVoucherNo: row.reference_voucher_no || '',
         notes: row.notes || '',
         clearedAt: row.cleared_at || undefined,
-        createdAt: row.created_at || new Date().toISOString()
+        depositDate: row.deposit_date || undefined,
+        bounceDate: row.bounce_date || undefined,
+        bounceReason: row.bounce_reason || undefined,
+        bounceCharges: Number(row.bounce_charges || 0),
+        linkedJournalId: row.linked_journal_id || undefined,
+        createdAt: row.created_at || new Date().toISOString(),
+        updatedAt: row.updated_at || undefined
       }));
     } catch (e) {
       console.error('Error fetching PDCs from Supabase:', e);
