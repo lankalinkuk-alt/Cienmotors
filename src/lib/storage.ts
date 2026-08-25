@@ -1338,27 +1338,47 @@ export const StorageService = {
     }
 
     // Reduce Customer Outstanding in memory
-    const cIndex = _inMemoryCustomers.findIndex(
-      (c) => c.id === receiptData.customerId && (c.companyId || DEFAULT_COMPANY_ID) === targetCompId
+    let cIndex = _inMemoryCustomers.findIndex(
+      (c) => c.id === receiptData.customerId
     );
+    if (cIndex === -1 && receiptData.customerName) {
+      cIndex = _inMemoryCustomers.findIndex(
+        (c) => c.name.toLowerCase() === receiptData.customerName?.toLowerCase()
+      );
+    }
     if (cIndex !== -1) {
       _inMemoryCustomers[cIndex].outstandingBalance = Math.max(
         0,
-        _inMemoryCustomers[cIndex].outstandingBalance - Number(receiptData.amount)
+        Number(((_inMemoryCustomers[cIndex].outstandingBalance || 0) - Number(receiptData.amount)).toFixed(2))
       );
     }
 
-    // Adjust allocated Sales Invoices
+    // Adjust allocated Sales Invoices (or auto FIFO if no manual allocations)
     if (receiptData.allocations && receiptData.allocations.length > 0) {
       for (const alloc of receiptData.allocations) {
         if (alloc.allocatedAmount > 0) {
           const sIndex = _inMemorySales.findIndex(
-            (s) => s.id === alloc.invoiceId && (s.companyId || DEFAULT_COMPANY_ID) === targetCompId
+            (s) => s.id === alloc.invoiceId
           );
           if (sIndex !== -1) {
-            _inMemorySales[sIndex].paidAmount = Number((_inMemorySales[sIndex].paidAmount + alloc.allocatedAmount).toFixed(2));
-            _inMemorySales[sIndex].dueAmount = Math.max(0, Number((_inMemorySales[sIndex].grandTotal - _inMemorySales[sIndex].paidAmount).toFixed(2)));
+            _inMemorySales[sIndex].paidAmount = Number(((_inMemorySales[sIndex].paidAmount || 0) + alloc.allocatedAmount).toFixed(2));
+            _inMemorySales[sIndex].dueAmount = Math.max(0, Number(((_inMemorySales[sIndex].grandTotal || 0) - _inMemorySales[sIndex].paidAmount).toFixed(2)));
           }
+        }
+      }
+    } else if (receiptData.customerId) {
+      let rem = Number(receiptData.amount || 0);
+      const custSales = _inMemorySales
+        .filter((s) => s.customerId === receiptData.customerId && (s.dueAmount || 0) > 0)
+        .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+      for (const s of custSales) {
+        if (rem <= 0) break;
+        const sIndex = _inMemorySales.findIndex((x) => x.id === s.id);
+        if (sIndex !== -1) {
+          const settle = Math.min(rem, _inMemorySales[sIndex].dueAmount);
+          _inMemorySales[sIndex].paidAmount = Number(((_inMemorySales[sIndex].paidAmount || 0) + settle).toFixed(2));
+          _inMemorySales[sIndex].dueAmount = Math.max(0, Number(((_inMemorySales[sIndex].grandTotal || 0) - _inMemorySales[sIndex].paidAmount).toFixed(2)));
+          rem = Number((rem - settle).toFixed(2));
         }
       }
     }
@@ -1399,17 +1419,20 @@ export const StorageService = {
     const targetIndex = _inMemoryReceipts.findIndex((r) => r.id === id);
     if (targetIndex !== -1) {
       const target = _inMemoryReceipts[targetIndex];
-      const cIndex = _inMemoryCustomers.findIndex((c) => c.id === target.customerId);
+      let cIndex = _inMemoryCustomers.findIndex((c) => c.id === target.customerId);
+      if (cIndex === -1 && target.customerName) {
+        cIndex = _inMemoryCustomers.findIndex((c) => c.name.toLowerCase() === target.customerName.toLowerCase());
+      }
       if (cIndex !== -1) {
-        _inMemoryCustomers[cIndex].outstandingBalance += Number(target.amount);
+        _inMemoryCustomers[cIndex].outstandingBalance = Number(((_inMemoryCustomers[cIndex].outstandingBalance || 0) + Number(target.amount)).toFixed(2));
       }
       if (target.allocations && target.allocations.length > 0) {
         for (const alloc of target.allocations) {
           if (alloc.allocatedAmount > 0) {
             const sIndex = _inMemorySales.findIndex((s) => s.id === alloc.invoiceId);
             if (sIndex !== -1) {
-              _inMemorySales[sIndex].paidAmount = Math.max(0, Number((_inMemorySales[sIndex].paidAmount - alloc.allocatedAmount).toFixed(2)));
-              _inMemorySales[sIndex].dueAmount = Math.max(0, Number((_inMemorySales[sIndex].grandTotal - _inMemorySales[sIndex].paidAmount).toFixed(2)));
+              _inMemorySales[sIndex].paidAmount = Math.max(0, Number(((_inMemorySales[sIndex].paidAmount || 0) - alloc.allocatedAmount).toFixed(2)));
+              _inMemorySales[sIndex].dueAmount = Math.max(0, Number(((_inMemorySales[sIndex].grandTotal || 0) - _inMemorySales[sIndex].paidAmount).toFixed(2)));
             }
           }
         }
@@ -1487,27 +1510,47 @@ export const StorageService = {
     }
 
     // Reduce Supplier Payable in memory
-    const sIndex = _inMemorySuppliers.findIndex(
-      (s) => s.id === paymentData.supplierId && (s.companyId || DEFAULT_COMPANY_ID) === targetCompId
+    let sIndex = _inMemorySuppliers.findIndex(
+      (s) => s.id === paymentData.supplierId
     );
+    if (sIndex === -1 && paymentData.supplierName) {
+      sIndex = _inMemorySuppliers.findIndex(
+        (s) => s.name.toLowerCase() === paymentData.supplierName?.toLowerCase()
+      );
+    }
     if (sIndex !== -1) {
       _inMemorySuppliers[sIndex].payableBalance = Math.max(
         0,
-        _inMemorySuppliers[sIndex].payableBalance - Number(paymentData.amount)
+        Number(((_inMemorySuppliers[sIndex].payableBalance || 0) - Number(paymentData.amount)).toFixed(2))
       );
     }
 
-    // Adjust allocated purchases
+    // Adjust allocated purchases (or auto FIFO if no manual allocations)
     if (paymentData.allocations && paymentData.allocations.length > 0) {
       for (const alloc of paymentData.allocations) {
         if (alloc.allocatedAmount > 0) {
           const pIndex = _inMemoryPurchases.findIndex(
-            (p) => p.id === alloc.purchaseId && (p.companyId || DEFAULT_COMPANY_ID) === targetCompId
+            (p) => p.id === alloc.purchaseId
           );
           if (pIndex !== -1) {
-            _inMemoryPurchases[pIndex].paidAmount = Number((_inMemoryPurchases[pIndex].paidAmount + alloc.allocatedAmount).toFixed(2));
-            _inMemoryPurchases[pIndex].dueAmount = Math.max(0, Number((_inMemoryPurchases[pIndex].grandTotal - _inMemoryPurchases[pIndex].paidAmount).toFixed(2)));
+            _inMemoryPurchases[pIndex].paidAmount = Number(((_inMemoryPurchases[pIndex].paidAmount || 0) + alloc.allocatedAmount).toFixed(2));
+            _inMemoryPurchases[pIndex].dueAmount = Math.max(0, Number(((_inMemoryPurchases[pIndex].grandTotal || 0) - _inMemoryPurchases[pIndex].paidAmount).toFixed(2)));
           }
+        }
+      }
+    } else if (paymentData.supplierId) {
+      let rem = Number(paymentData.amount || 0);
+      const supPurs = _inMemoryPurchases
+        .filter((p) => p.supplierId === paymentData.supplierId && (p.dueAmount || 0) > 0)
+        .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+      for (const p of supPurs) {
+        if (rem <= 0) break;
+        const pIndex = _inMemoryPurchases.findIndex((x) => x.id === p.id);
+        if (pIndex !== -1) {
+          const settle = Math.min(rem, _inMemoryPurchases[pIndex].dueAmount);
+          _inMemoryPurchases[pIndex].paidAmount = Number(((_inMemoryPurchases[pIndex].paidAmount || 0) + settle).toFixed(2));
+          _inMemoryPurchases[pIndex].dueAmount = Math.max(0, Number(((_inMemoryPurchases[pIndex].grandTotal || 0) - _inMemoryPurchases[pIndex].paidAmount).toFixed(2)));
+          rem = Number((rem - settle).toFixed(2));
         }
       }
     }
@@ -1548,17 +1591,20 @@ export const StorageService = {
     const targetIndex = _inMemoryPayments.findIndex((p) => p.id === id);
     if (targetIndex !== -1) {
       const target = _inMemoryPayments[targetIndex];
-      const sIndex = _inMemorySuppliers.findIndex((s) => s.id === target.supplierId);
+      let sIndex = _inMemorySuppliers.findIndex((s) => s.id === target.supplierId);
+      if (sIndex === -1 && target.supplierName) {
+        sIndex = _inMemorySuppliers.findIndex((s) => s.name.toLowerCase() === target.supplierName.toLowerCase());
+      }
       if (sIndex !== -1) {
-        _inMemorySuppliers[sIndex].payableBalance += Number(target.amount);
+        _inMemorySuppliers[sIndex].payableBalance = Number(((_inMemorySuppliers[sIndex].payableBalance || 0) + Number(target.amount)).toFixed(2));
       }
       if (target.allocations && target.allocations.length > 0) {
         for (const alloc of target.allocations) {
           if (alloc.allocatedAmount > 0) {
             const pIndex = _inMemoryPurchases.findIndex((p) => p.id === alloc.purchaseId);
             if (pIndex !== -1) {
-              _inMemoryPurchases[pIndex].paidAmount = Math.max(0, Number((_inMemoryPurchases[pIndex].paidAmount - alloc.allocatedAmount).toFixed(2)));
-              _inMemoryPurchases[pIndex].dueAmount = Math.max(0, Number((_inMemoryPurchases[pIndex].grandTotal - _inMemoryPurchases[pIndex].paidAmount).toFixed(2)));
+              _inMemoryPurchases[pIndex].paidAmount = Math.max(0, Number(((_inMemoryPurchases[pIndex].paidAmount || 0) - alloc.allocatedAmount).toFixed(2)));
+              _inMemoryPurchases[pIndex].dueAmount = Math.max(0, Number(((_inMemoryPurchases[pIndex].grandTotal || 0) - _inMemoryPurchases[pIndex].paidAmount).toFixed(2)));
             }
           }
         }

@@ -1222,52 +1222,136 @@ export const SupabaseSyncService = {
     try {
       await ensureCompanyExists(client, receipt.companyId || 'comp-1');
 
-      // 1. Try atomic PostgreSQL RPC first
-      try {
-        const { data: rpcData, error: rpcError } = await client.rpc('post_customer_receipt_rpc', {
-          p_request_id: reqId,
-          p_company_id: receipt.companyId || 'comp-1',
-          p_customer_id: receipt.customerId || null,
-          p_customer_name: receipt.customerName || 'Walk-in Customer',
-          p_date: receipt.date || new Date().toISOString().split('T')[0],
-          p_amount: Number(receipt.amount || 0),
-          p_payment_method: receipt.paymentMode || 'CASH',
-          p_reference_no: receipt.referenceNo || '',
-          p_notes: receipt.notes || ''
-        });
+      // 1. Idempotency Check
+      const { data: existingRec } = await client
+        .from('busy_ufo_customer_receipts')
+        .select('*')
+        .eq('request_id', reqId)
+        .maybeSingle();
 
-        if (!rpcError && rpcData?.success) {
-          if (rpcData.is_duplicate) {
-            return { success: true, isDuplicate: true };
+      if (existingRec) {
+        return {
+          success: true,
+          isDuplicate: true,
+          existingData: {
+            ...receipt,
+            id: existingRec.id,
+            receiptNumber: existingRec.receipt_number,
+            requestId: existingRec.request_id
           }
-          return { success: true };
-        }
-      } catch (rpcErr) {
-        console.warn('RPC post_customer_receipt_rpc failed, falling back to direct upsert:', rpcErr);
+        };
       }
 
-      // 2. Fallback direct upsert
-      const payload = {
+      const finalRecNum = receipt.receiptNumber || await this.generateNextReceiptNumber(receipt.companyId || 'comp-1');
+
+      // 2. Direct Upsert of Receipt
+      const payload: any = {
         id: receipt.id,
         request_id: reqId,
-        receipt_number: receipt.receiptNumber || `REC-${new Date().getFullYear()}-${Date.now().toString().slice(-4)}`,
-        date: receipt.date,
+        receipt_number: finalRecNum,
+        date: receipt.date || new Date().toISOString().split('T')[0],
         customer_id: receipt.customerId || null,
-        customer_name: receipt.customerName,
+        customer_name: receipt.customerName || 'Customer',
         amount: Number(receipt.amount || 0),
         payment_method: receipt.paymentMode || 'CASH',
         reference_no: receipt.referenceNo || '',
         notes: receipt.notes || '',
         company_id: receipt.companyId || 'comp-1'
       };
-      const { error } = await client.from('busy_ufo_customer_receipts').upsert(payload, { onConflict: 'id' });
-      if (error) {
-        if (error.message?.includes('request_id') || error.code === '23505') {
-          return { success: true, isDuplicate: true };
+
+      const { error: upsertErr } = await client.from('busy_ufo_customer_receipts').upsert(payload, { onConflict: 'id' });
+      if (upsertErr) {
+        delete payload.request_id;
+        const { error: retryErr } = await client.from('busy_ufo_customer_receipts').upsert(payload, { onConflict: 'id' });
+        if (retryErr) {
+          return { success: false, error: retryErr.message };
         }
-        return { success: false, error: error.message };
       }
-      return { success: true };
+
+      // 3. DEDUCT CUSTOMER OUTSTANDING IN SUPABASE
+      if (receipt.customerId && Number(receipt.amount || 0) > 0) {
+        try {
+          const { data: cust } = await client
+            .from('busy_ufo_customers')
+            .select('current_balance')
+            .eq('id', receipt.customerId)
+            .maybeSingle();
+          if (cust) {
+            const newBal = Math.max(0, Number(((cust.current_balance || 0) - Number(receipt.amount || 0)).toFixed(2)));
+            await client
+              .from('busy_ufo_customers')
+              .update({ current_balance: newBal, updated_at: new Date().toISOString() })
+              .eq('id', receipt.customerId);
+          }
+        } catch (custErr) {
+          console.warn('Could not update customer current_balance in Supabase:', custErr);
+        }
+      }
+
+      // 4. UPDATE SALES INVOICES (ALLOCATIONS OR FIFO) IN SUPABASE
+      if (receipt.allocations && receipt.allocations.length > 0) {
+        for (const alloc of receipt.allocations) {
+          if (alloc.allocatedAmount > 0 && alloc.invoiceId) {
+            try {
+              const { data: inv } = await client
+                .from('busy_ufo_sales')
+                .select('grand_total, paid_amount, due_amount')
+                .eq('id', alloc.invoiceId)
+                .maybeSingle();
+              if (inv) {
+                const newPaid = Number(((inv.paid_amount || 0) + alloc.allocatedAmount).toFixed(2));
+                const newDue = Math.max(0, Number(((inv.grand_total || 0) - newPaid).toFixed(2)));
+                const status = newDue <= 0 ? 'PAID' : (newPaid > 0 ? 'PARTIAL' : 'UNPAID');
+                await client
+                  .from('busy_ufo_sales')
+                  .update({ paid_amount: newPaid, due_amount: newDue, payment_status: status })
+                  .eq('id', alloc.invoiceId);
+              }
+            } catch (invErr) {
+              console.warn('Could not update sales invoice in Supabase:', invErr);
+            }
+          }
+        }
+      } else if (receipt.customerId && Number(receipt.amount || 0) > 0) {
+        // FIFO auto-settle unpaid sales invoices for this customer
+        try {
+          const { data: unpaidSales } = await client
+            .from('busy_ufo_sales')
+            .select('id, grand_total, paid_amount, due_amount, invoice_date')
+            .eq('customer_id', receipt.customerId)
+            .gt('due_amount', 0)
+            .order('invoice_date', { ascending: true });
+
+          if (unpaidSales && unpaidSales.length > 0) {
+            let rem = Number(receipt.amount);
+            for (const s of unpaidSales) {
+              if (rem <= 0) break;
+              const currentDue = Number(s.due_amount || 0);
+              const currentPaid = Number(s.paid_amount || 0);
+              const settleAmt = Math.min(rem, currentDue);
+              const newPaid = Number((currentPaid + settleAmt).toFixed(2));
+              const newDue = Math.max(0, Number(((s.grand_total || 0) - newPaid).toFixed(2)));
+              const status = newDue <= 0 ? 'PAID' : (newPaid > 0 ? 'PARTIAL' : 'UNPAID');
+              await client
+                .from('busy_ufo_sales')
+                .update({ paid_amount: newPaid, due_amount: newDue, payment_status: status })
+                .eq('id', s.id);
+              rem = Number((rem - settleAmt).toFixed(2));
+            }
+          }
+        } catch (fifoErr) {
+          console.warn('FIFO auto-settle error in Supabase:', fifoErr);
+        }
+      }
+
+      return {
+        success: true,
+        existingData: {
+          ...receipt,
+          receiptNumber: finalRecNum,
+          requestId: reqId
+        }
+      };
     } catch (e: any) {
       return { success: false, error: e?.message };
     } finally {
@@ -1279,6 +1363,32 @@ export const SupabaseSyncService = {
     const client = getSupabaseClient();
     if (!client) return { success: false, error: 'Supabase not configured' };
     try {
+      // 1. Fetch receipt details before deleting to revert customer balance
+      const { data: rec } = await client
+        .from('busy_ufo_customer_receipts')
+        .select('*')
+        .eq('id', id)
+        .maybeSingle();
+
+      if (rec && rec.customer_id && Number(rec.amount || 0) > 0) {
+        try {
+          const { data: cust } = await client
+            .from('busy_ufo_customers')
+            .select('current_balance')
+            .eq('id', rec.customer_id)
+            .maybeSingle();
+          if (cust) {
+            const restoredBal = Number(((cust.current_balance || 0) + Number(rec.amount || 0)).toFixed(2));
+            await client
+              .from('busy_ufo_customers')
+              .update({ current_balance: restoredBal, updated_at: new Date().toISOString() })
+              .eq('id', rec.customer_id);
+          }
+        } catch (err) {
+          console.warn('Could not restore customer balance on receipt delete:', err);
+        }
+      }
+
       const { error } = await client.from('busy_ufo_customer_receipts').delete().eq('id', id);
       if (error) {
         console.warn('Supabase receipt delete error:', error);
@@ -1304,52 +1414,136 @@ export const SupabaseSyncService = {
     try {
       await ensureCompanyExists(client, payment.companyId || 'comp-1');
 
-      // 1. Try atomic PostgreSQL RPC first
-      try {
-        const { data: rpcData, error: rpcError } = await client.rpc('post_supplier_payment_rpc', {
-          p_request_id: reqId,
-          p_company_id: payment.companyId || 'comp-1',
-          p_supplier_id: payment.supplierId || null,
-          p_supplier_name: payment.supplierName || 'General Supplier',
-          p_date: payment.date || new Date().toISOString().split('T')[0],
-          p_amount: Number(payment.amount || 0),
-          p_payment_method: payment.paymentMode || 'CASH',
-          p_reference_no: payment.referenceNo || '',
-          p_notes: payment.notes || ''
-        });
+      // 1. Idempotency Check
+      const { data: existingPay } = await client
+        .from('busy_ufo_supplier_payments')
+        .select('*')
+        .eq('request_id', reqId)
+        .maybeSingle();
 
-        if (!rpcError && rpcData?.success) {
-          if (rpcData.is_duplicate) {
-            return { success: true, isDuplicate: true };
+      if (existingPay) {
+        return {
+          success: true,
+          isDuplicate: true,
+          existingData: {
+            ...payment,
+            id: existingPay.id,
+            paymentNumber: existingPay.payment_number,
+            requestId: existingPay.request_id
           }
-          return { success: true };
-        }
-      } catch (rpcErr) {
-        console.warn('RPC post_supplier_payment_rpc failed, falling back to direct upsert:', rpcErr);
+        };
       }
 
-      // 2. Fallback direct upsert
-      const payload = {
+      const finalPayNum = payment.paymentNumber || await this.generateNextPaymentNumber(payment.companyId || 'comp-1');
+
+      // 2. Direct Upsert of Payment
+      const payload: any = {
         id: payment.id,
         request_id: reqId,
-        payment_number: payment.paymentNumber || `PAY-${new Date().getFullYear()}-${Date.now().toString().slice(-4)}`,
-        date: payment.date,
+        payment_number: finalPayNum,
+        date: payment.date || new Date().toISOString().split('T')[0],
         supplier_id: payment.supplierId || null,
-        supplier_name: payment.supplierName,
+        supplier_name: payment.supplierName || 'Supplier',
         amount: Number(payment.amount || 0),
         payment_method: payment.paymentMode || 'CASH',
         reference_no: payment.referenceNo || '',
         notes: payment.notes || '',
         company_id: payment.companyId || 'comp-1'
       };
-      const { error } = await client.from('busy_ufo_supplier_payments').upsert(payload, { onConflict: 'id' });
-      if (error) {
-        if (error.message?.includes('request_id') || error.code === '23505') {
-          return { success: true, isDuplicate: true };
+
+      const { error: upsertErr } = await client.from('busy_ufo_supplier_payments').upsert(payload, { onConflict: 'id' });
+      if (upsertErr) {
+        delete payload.request_id;
+        const { error: retryErr } = await client.from('busy_ufo_supplier_payments').upsert(payload, { onConflict: 'id' });
+        if (retryErr) {
+          return { success: false, error: retryErr.message };
         }
-        return { success: false, error: error.message };
       }
-      return { success: true };
+
+      // 3. DEDUCT SUPPLIER PAYABLE IN SUPABASE
+      if (payment.supplierId && Number(payment.amount || 0) > 0) {
+        try {
+          const { data: sup } = await client
+            .from('busy_ufo_suppliers')
+            .select('current_balance')
+            .eq('id', payment.supplierId)
+            .maybeSingle();
+          if (sup) {
+            const newBal = Math.max(0, Number(((sup.current_balance || 0) - Number(payment.amount || 0)).toFixed(2)));
+            await client
+              .from('busy_ufo_suppliers')
+              .update({ current_balance: newBal, updated_at: new Date().toISOString() })
+              .eq('id', payment.supplierId);
+          }
+        } catch (supErr) {
+          console.warn('Could not update supplier current_balance in Supabase:', supErr);
+        }
+      }
+
+      // 4. UPDATE PURCHASES (ALLOCATIONS OR FIFO) IN SUPABASE
+      if (payment.allocations && payment.allocations.length > 0) {
+        for (const alloc of payment.allocations) {
+          if (alloc.allocatedAmount > 0 && alloc.purchaseId) {
+            try {
+              const { data: pur } = await client
+                .from('busy_ufo_purchases')
+                .select('grand_total, paid_amount, due_amount')
+                .eq('id', alloc.purchaseId)
+                .maybeSingle();
+              if (pur) {
+                const newPaid = Number(((pur.paid_amount || 0) + alloc.allocatedAmount).toFixed(2));
+                const newDue = Math.max(0, Number(((pur.grand_total || 0) - newPaid).toFixed(2)));
+                const status = newDue <= 0 ? 'PAID' : (newPaid > 0 ? 'PARTIAL' : 'UNPAID');
+                await client
+                  .from('busy_ufo_purchases')
+                  .update({ paid_amount: newPaid, due_amount: newDue, payment_status: status })
+                  .eq('id', alloc.purchaseId);
+              }
+            } catch (purErr) {
+              console.warn('Could not update purchase in Supabase:', purErr);
+            }
+          }
+        }
+      } else if (payment.supplierId && Number(payment.amount || 0) > 0) {
+        // FIFO auto-settle unpaid purchases for this supplier
+        try {
+          const { data: unpaidPurs } = await client
+            .from('busy_ufo_purchases')
+            .select('id, grand_total, paid_amount, due_amount, purchase_date')
+            .eq('supplier_id', payment.supplierId)
+            .gt('due_amount', 0)
+            .order('purchase_date', { ascending: true });
+
+          if (unpaidPurs && unpaidPurs.length > 0) {
+            let rem = Number(payment.amount);
+            for (const p of unpaidPurs) {
+              if (rem <= 0) break;
+              const currentDue = Number(p.due_amount || 0);
+              const currentPaid = Number(p.paid_amount || 0);
+              const settleAmt = Math.min(rem, currentDue);
+              const newPaid = Number((currentPaid + settleAmt).toFixed(2));
+              const newDue = Math.max(0, Number(((p.grand_total || 0) - newPaid).toFixed(2)));
+              const status = newDue <= 0 ? 'PAID' : (newPaid > 0 ? 'PARTIAL' : 'UNPAID');
+              await client
+                .from('busy_ufo_purchases')
+                .update({ paid_amount: newPaid, due_amount: newDue, payment_status: status })
+                .eq('id', p.id);
+              rem = Number((rem - settleAmt).toFixed(2));
+            }
+          }
+        } catch (fifoErr) {
+          console.warn('FIFO auto-settle purchases error in Supabase:', fifoErr);
+        }
+      }
+
+      return {
+        success: true,
+        existingData: {
+          ...payment,
+          paymentNumber: finalPayNum,
+          requestId: reqId
+        }
+      };
     } catch (e: any) {
       return { success: false, error: e?.message };
     } finally {
@@ -1361,6 +1555,32 @@ export const SupabaseSyncService = {
     const client = getSupabaseClient();
     if (!client) return { success: false, error: 'Supabase not configured' };
     try {
+      // 1. Fetch payment details before deleting to revert supplier balance
+      const { data: pay } = await client
+        .from('busy_ufo_supplier_payments')
+        .select('*')
+        .eq('id', id)
+        .maybeSingle();
+
+      if (pay && pay.supplier_id && Number(pay.amount || 0) > 0) {
+        try {
+          const { data: sup } = await client
+            .from('busy_ufo_suppliers')
+            .select('current_balance')
+            .eq('id', pay.supplier_id)
+            .maybeSingle();
+          if (sup) {
+            const restoredBal = Number(((sup.current_balance || 0) + Number(pay.amount || 0)).toFixed(2));
+            await client
+              .from('busy_ufo_suppliers')
+              .update({ current_balance: restoredBal, updated_at: new Date().toISOString() })
+              .eq('id', pay.supplier_id);
+          }
+        } catch (err) {
+          console.warn('Could not restore supplier balance on payment delete:', err);
+        }
+      }
+
       const { error } = await client.from('busy_ufo_supplier_payments').delete().eq('id', id);
       if (error) {
         console.warn('Supabase payment delete error:', error);
